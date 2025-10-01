@@ -1,0 +1,21 @@
+[package]
+name = "monero-epee-derive"
+version = "0.1.0"
+description = "`derive` macros for `monero-epee-traits`"
+license = "MIT"
+authors = ["Luke Parker <lukeparker5132@gmail.com>"]
+edition = "2021"
+rust-version = "1.79"
+
+[lib]
+proc-macro = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+monero-epee-traits = { path = "../traits", version = "0.1" }
