@@ -1,104 +1,158 @@
 //! IO primitives around bytes.
 
-use crate::EpeeError;
+use core::{marker::PhantomData, fmt::Debug};
 
 /// An item which is like a `&[u8]`.
+///
+/// This should be a reference to a buffer for which references are cheap to work with.
 #[allow(clippy::len_without_is_empty)]
-pub trait BytesLike<'encoding>: Sized {
-  /// The length of the current item.
-  // This is only used for `as_fixed_len_str` within this library.
-  fn len(&self) -> usize;
+pub trait BytesLike<'bytes>: Sized + Debug {
+  /// The type for errors when interacting with these bytes.
+  type Error: Sized + Copy + Debug;
+
+  /// The type representing the length of a _read_ `BytesLike`, if a `BytesLike` does not
+  /// inherently know its length.
+  ///
+  /// This should be `usize` or `()`.
+  type ExternallyTrackedLength: Sized + Copy + Debug;
+
+  /// The length of these bytes.
+  fn len(&self, len: Self::ExternallyTrackedLength) -> usize;
+
+  /// Peak at a byte.
+  fn peek(&self, i: usize) -> Result<u8, Self::Error>;
 
   /// Read a fixed amount of bytes from the container.
   ///
-  /// This MUST return `Ok(slice)` where `slice` is the expected length or `Err(_)`.
-  fn read_bytes(&mut self, bytes: usize) -> Result<Self, EpeeError>;
+  /// This MUST return `Ok((len, slice))` where `slice` is the expected length or `Err(_)`.
+  fn read_bytes(
+    &mut self,
+    bytes: usize,
+  ) -> Result<(Self::ExternallyTrackedLength, Self), Self::Error>;
 
   /// Read a fixed amount of bytes from the container into a slice.
   /*
     We _could_ provide this method around `read_bytes` but it'd be a very inefficient
     default implementation. It's best to require callers provide the implementation.
   */
-  fn read_into_slice(&mut self, slice: &mut [u8]) -> Result<(), EpeeError>;
+  fn read_into_slice(&mut self, slice: &mut [u8]) -> Result<(), Self::Error>;
 
   /// Read a byte from the container.
-  fn read_byte(&mut self) -> Result<u8, EpeeError> {
+  #[inline(always)]
+  fn read_byte(&mut self) -> Result<u8, Self::Error> {
     let mut buf = [0; 1];
     self.read_into_slice(&mut buf)?;
     Ok(buf[0])
   }
 
   /// Advance the container by a certain amount of bytes.
-  fn advance<const N: usize>(&mut self) -> Result<(), EpeeError> {
-    self.read_bytes(N).map(|_| ())
+  #[inline(always)]
+  fn advance(&mut self, bytes: usize) -> Result<(), Self::Error> {
+    self.read_bytes(bytes).map(|_| ())
   }
 }
 
-impl<'encoding> BytesLike<'encoding> for &'encoding [u8] {
+/// An error when working with `&[u8]`.
+#[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
+pub enum SliceError {
+  /// The blob was short, as discovered when trying to read `{0}` bytes.
+  Short(usize),
+}
+
+impl<'bytes> BytesLike<'bytes> for &'bytes [u8] {
+  type Error = SliceError;
+
+  type ExternallyTrackedLength = ();
+
   #[inline(always)]
-  fn len(&self) -> usize {
+  fn len(&self, (): ()) -> usize {
     <[u8]>::len(self)
   }
 
   #[inline(always)]
-  fn read_bytes(&mut self, bytes: usize) -> Result<Self, EpeeError> {
-    if self.len() < bytes {
-      Err(EpeeError::Short(bytes))?;
-    }
-    let res = &self[.. bytes];
-    *self = &self[bytes ..];
-    Ok(res)
+  fn peek(&self, i: usize) -> Result<u8, Self::Error> {
+    self.get(i).ok_or_else(|| SliceError::Short((i - <[u8]>::len(self)).saturating_add(1))).copied()
   }
 
   #[inline(always)]
-  fn read_into_slice(&mut self, slice: &mut [u8]) -> Result<(), EpeeError> {
-    /*
-      To satisfy the API, we do have to perform this copy here despite it being unnecessary for
-      this literal type. Thankfully, we only call this method for a max of just eight bytes.
-    */
-    slice.copy_from_slice(self.read_bytes(slice.len())?);
+  fn read_bytes(
+    &mut self,
+    bytes: usize,
+  ) -> Result<(Self::ExternallyTrackedLength, Self), Self::Error> {
+    if <[u8]>::len(self) < bytes {
+      Err(SliceError::Short(bytes))?;
+    }
+    let res = &self[.. bytes];
+    *self = &self[bytes ..];
+    Ok(((), res))
+  }
+
+  #[inline(always)]
+  fn read_into_slice(&mut self, slice: &mut [u8]) -> Result<(), Self::Error> {
+    slice.copy_from_slice(self.read_bytes(slice.len())?.1);
     Ok(())
   }
 }
 
-/// Read a VarInt per EPEE's definition.
+/// A collection of bytes with an associated length.
 ///
-/// This does not require the VarInt is canonically encoded. It _may_ be malleated to have a larger
-/// than necessary encoding.
-// https://github.com/monero-project/monero/blob/8d4c625713e3419573dfcc7119c8848f47cabbaa
-//   /contrib/epee/include/storages/portable_storage_from_bin.h#L237-L255
-pub(crate) fn read_varint<'encoding>(
-  reader: &mut impl BytesLike<'encoding>,
-) -> Result<u64, EpeeError> {
-  let vi_start = reader.read_byte()?;
-
-  // https://github.com/monero-project/monero/blob/8d4c625713e3419573dfcc7119c8848f47cabbaa
-  //  /contrib/epee/include/storages/portable_storage_base.h#L41
-  let len = match vi_start & 0b11 {
-    0 => 1,
-    1 => 2,
-    2 => 4,
-    3 => 8,
-    _ => unreachable!(),
-  };
-
-  let mut vi = u64::from(vi_start);
-  for i in 1 .. len {
-    vi |= u64::from(reader.read_byte()?) << (i * 8);
-  }
-  vi >>= 2;
-
-  Ok(vi)
+/// This avoids defining `BytesLike::len` which lets us relax the requirement `BytesLike` knows its
+/// length before it has reached its end.
+#[derive(Debug)]
+pub struct String<'bytes, B: BytesLike<'bytes>> {
+  pub(crate) len: B::ExternallyTrackedLength,
+  pub(crate) bytes: B,
+  pub(crate) _encoding: PhantomData<&'bytes ()>,
 }
 
-/// Read a string per EPEE's definition.
-#[inline(always)]
-pub(crate) fn read_str<'encoding, B: BytesLike<'encoding>>(reader: &mut B) -> Result<B, EpeeError> {
-  /*
-    Since this VarInt exceeds `usize::MAX`, it references more bytes than our system can represent
-    within a single slice. Accordingly, our slice _must_ be short. As we potentially can't
-    represent how short, we simply use `usize::MAX` here.
-  */
-  let len = usize::try_from(read_varint(reader)?).map_err(|_| EpeeError::Short(usize::MAX))?;
-  reader.read_bytes(len)
+impl<'bytes, B: BytesLike<'bytes>> String<'bytes, B> {
+  /// If this string is empty.
+  #[inline(always)]
+  pub fn is_empty(&self) -> bool {
+    self.bytes.len(self.len) == 0
+  }
+
+  /// The length of this string.
+  #[inline(always)]
+  pub fn len(&self) -> usize {
+    self.bytes.len(self.len)
+  }
+
+  /// Consume this into its underlying bytes.
+  #[inline(always)]
+  pub fn consume(self) -> B {
+    self.bytes
+  }
+}
+
+/// Read a just-opened string from a JSON serialization.
+pub(crate) fn read_string<'bytes, B: BytesLike<'bytes>>(
+  bytes: &mut B,
+) -> Result<String<'bytes, B>, B::Error> {
+  // Find the location of the terminating quote
+  let mut i = 0;
+  {
+    let mut prior = None;
+    loop {
+      let this = bytes.peek(i)?;
+      // This is UTF-8 compatible as multi-byte codepoints which always have leading `1` bits, and
+      // these values are < 128 (being ASCII)
+      if (prior != Some(b'\\')) && (this == b'"') {
+        break;
+      }
+      // If this is an escape sequence, handle if it itself is escaped
+      if (this == b'\\') && (prior == Some(b'\\')) {
+        prior = None;
+      } else {
+        prior = Some(this);
+      }
+      i += 1;
+    }
+  }
+
+  let (len, str_bytes) = bytes.read_bytes(i)?;
+  // Advance past the closing `"`
+  bytes.advance(1)?;
+  Ok(String { len, bytes: str_bytes, _encoding: PhantomData })
 }

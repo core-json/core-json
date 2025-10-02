@@ -12,13 +12,18 @@ A no-`std` no-`alloc` JSON deserializer.
 - Additionally offer deserializing into typed structures, when allocations are
   allowed (adding a dependency on `hashbrown` when `alloc` but not `std`)
 
+### Non-Goals
+
+- Assert the deserialized JSON is valid. While some checks are performed for
+  the sanity of deserialization, this is not intended to reject inputs other
+  deserializers would likely reject
+
 ### Implementation Details
 
 The deserializer is represented using a stack of the current state. The stack
 is parameterized by a constant for the maximum depth allowed for the
 deserialized objects, which will be used for a fixed allocation on the stack.
-Even when an object with a depth of 100 is allowed, the deserializer's state is
-less than a kilobyte.
+The deserializer's state is approximately one byte per allowed nested object.
 
 Optionally, the caller may specify a stack which does dynamically allocate and
 supports an unbounded depth accordingly.

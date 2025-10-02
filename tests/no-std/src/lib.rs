@@ -1,13 +1,8 @@
 #![no_std]
 
-pub use monero_epee;
+pub use core_json;
+pub use core_json_traits;
 
-#[cfg(feature = "alloc")]
-pub mod alloc {
-  pub use monero_epee_traits;
-  pub use monero_wallet;
-
-  #[allow(dead_code)]
-  #[derive(Default, monero_epee_derive::EpeeDecode)]
-  struct Epee {}
-}
+#[allow(dead_code)]
+#[derive(Default, core_json_derive::JsonDeserialize)]
+struct Json {}

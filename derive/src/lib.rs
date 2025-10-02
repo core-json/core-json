@@ -60,15 +60,15 @@ fn skip_comma_delimited(iter: &mut Peekable<impl Iterator<Item: Borrow<TokenTree
   }
 }
 
-/// Derive an implementation of the `EpeeDecode` trait.
+/// Derive an implementation of the `JsonDeserialize` trait.
 ///
 /// This _requires_ the `struct` derived for implement `Default`. Fields which aren't present in
-/// the encoding will be left to their `Default` initialization. If you wish to detect if a field
-/// was omitted, please wrap it in `Option`.
+/// the serialization will be left to their `Default` initialization. If you wish to detect if a
+/// field was omitted, please wrap it in `Option`.
 ///
 /// As a procedural macro, this will panic causing a compile-time error on any unexpected input.
-#[proc_macro_derive(EpeeDecode)]
-pub fn derive_epee_decode(object: TokenStream) -> TokenStream {
+#[proc_macro_derive(JsonDeserialize)]
+pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
   let generic_bounds;
   let generics;
   let object_name;
@@ -91,11 +91,11 @@ pub fn derive_epee_decode(object: TokenStream) -> TokenStream {
 
     match object.next() {
       Some(TokenTree::Ident(ident)) if ident.to_string() == "struct" => {}
-      _ => panic!("`EpeeDecode` wasn't applied to a `struct`"),
+      _ => panic!("`JsonDeserialize` wasn't applied to a `struct`"),
     }
     object_name = match object.next() {
       Some(TokenTree::Ident(ident)) => ident.to_string(),
-      _ => panic!("`EpeeDecode` wasn't applied to a `struct` with a name"),
+      _ => panic!("`JsonDeserialize` wasn't applied to a `struct` with a name"),
     };
 
     let generic_bounds_tree = take_angle_expression(&mut object);
@@ -135,7 +135,7 @@ pub fn derive_epee_decode(object: TokenStream) -> TokenStream {
       panic!("`struct`'s name was not followed by its body");
     };
     if struct_body.delimiter() != Delimiter::Brace {
-      panic!("`EpeeDecode` derivation applied to `struct` with anonymous fields");
+      panic!("`JsonDeserialize` derivation applied to `struct` with anonymous fields");
     }
     let mut struct_body = struct_body.stream().into_iter().peekable();
     // Read each field within this `struct`'s body
@@ -159,7 +159,9 @@ pub fn derive_epee_decode(object: TokenStream) -> TokenStream {
 
       all_fields.push_str(&format!(
         r#"
-        b"{field_name}" => result.{field_name} = monero_epee_traits::EpeeDecode::decode(value)?,
+        b"{field_name}" => {{
+          result.{field_name} = core_json_traits::JsonDeserialize::deserialize(value)?
+        }},
       "#
       ));
 
@@ -170,17 +172,22 @@ pub fn derive_epee_decode(object: TokenStream) -> TokenStream {
 
   TokenStream::from_str(&format!(
     r#"
-    impl{generic_bounds} monero_epee_traits::EpeeDecode for {object_name}{generics}
+    impl{generic_bounds} core_json_traits::JsonDeserialize for {object_name}{generics}
       where Self: core::default::Default {{
-      fn decode<'encoding, 'parent, B: monero_epee_traits::BytesLike<'encoding>>(
-        entry: monero_epee_traits::EpeeEntry<'encoding, 'parent, B>,
-      ) -> Result<Self, monero_epee_traits::EpeeError> {{
+      fn deserialize<
+        'bytes,
+        'parent,
+        B: core_json_traits::BytesLike<'bytes>,
+        S: core_json_traits::Stack,
+      >(
+        value: core_json_traits::Value<'bytes, 'parent, B, S>,
+      ) -> Result<Self, core_json_traits::JsonError<'bytes, B, S>> {{
         use core::default::Default;
 
         let mut result = Self::default();
 
         let mut key_bytes = [0; {largest_key}];
-        let mut object = entry.fields()?;
+        let mut object = value.fields()?;
         while let Some(field) = object.next() {{
           let (mut key, value) = field?;
 
@@ -189,7 +196,10 @@ pub fn derive_epee_decode(object: TokenStream) -> TokenStream {
           }}
           let key = {{
             let key_len = key.len();
-            key.read_into_slice(&mut key_bytes[.. key_len])?;
+            key
+              .consume()
+              .read_into_slice(&mut key_bytes[.. key_len])
+              .map_err(core_json_traits::JsonError::BytesError)?;
             &key_bytes[.. key_len]
           }};
 
@@ -203,9 +213,9 @@ pub fn derive_epee_decode(object: TokenStream) -> TokenStream {
         Ok(result)
       }}
     }}
-    impl{generic_bounds} monero_epee_traits::EpeeObject for {object_name}{generics}
+    impl{generic_bounds} core_json_traits::JsonObject for {object_name}{generics}
       where Self: core::default::Default {{}}
     "#
   ))
-  .expect("typo in implementation of `EpeeDecode`")
+  .expect("typo in implementation of `JsonDeserialize`")
 }

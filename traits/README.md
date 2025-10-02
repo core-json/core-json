@@ -1,12 +1,12 @@
-# Monero EPEE Traits
+# `core-json` Traits
 
-Traits for working with objects which may be decoded from an EPEE encoding.
+Traits for working with objects which may be deserialized from JSON.
 
-Internally, this uses the [`monero-epee`](https://docs.rs/monero-epee) crate.
-That crates itself focuses on being minimal, only offering a dynamically-typed
-view as EPEE-encoded data is ingested. This crate additionally adds traits for
-decoding into typed objects, requiring `alloc` in order to provide
-implementations over `Vec`.
+Internally, this uses the [`core-json`](https://docs.rs/core-json) crate. That
+crate focuses on being minimal, only offering a dynamically-typed view as
+JSON-serialized data is processed. This crate additionally adds traits for
+deserializing into typed objects, with an optional `alloc` feature in order to
+provide implementations over `Vec`.
 
-For automatic derivation of `EpeeDecode`, please see
-[`monero-epee-derive`](https://docs.rs/monero-epee-derive).
+For automatic derivation of `JsonDeserialize`, please see
+[`core-json-derive`](https://docs.rs/core-json-derive).

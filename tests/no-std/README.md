@@ -1,3 +1,4 @@
-# no-std tests
+# no-`std` tests
 
-A crate usable to test building the monero-oxide crates in a no-std environment.
+A crate usable to test building the `core-json` crates in a no-`std`
+environment.

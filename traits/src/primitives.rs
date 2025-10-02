@@ -1,99 +1,75 @@
-use crate::{BytesLike, EpeeError, Type, EpeeEntry, EpeeDecode};
+use crate::{BytesLike, Stack, JsonError, Value, JsonDeserialize};
 
-impl EpeeDecode for i8 {
-  fn decode<'encoding, 'parent, B: BytesLike<'encoding>>(
-    entry: EpeeEntry<'encoding, 'parent, B>,
-  ) -> Result<Self, EpeeError> {
-    entry.to_i8()
+impl JsonDeserialize for i8 {
+  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
+    value: Value<'bytes, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'bytes, B, S>> {
+    value.as_i64()?.try_into().map_err(|_| JsonError::TypeError)
   }
 }
-impl EpeeDecode for i16 {
-  fn decode<'encoding, 'parent, B: BytesLike<'encoding>>(
-    entry: EpeeEntry<'encoding, 'parent, B>,
-  ) -> Result<Self, EpeeError> {
-    match entry.kind() {
-      Type::Uint8 => Ok(entry.to_i8()?.into()),
-      _ => entry.to_i16(),
-    }
+impl JsonDeserialize for i16 {
+  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
+    value: Value<'bytes, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'bytes, B, S>> {
+    value.as_i64()?.try_into().map_err(|_| JsonError::TypeError)
   }
 }
-impl EpeeDecode for i32 {
-  fn decode<'encoding, 'parent, B: BytesLike<'encoding>>(
-    entry: EpeeEntry<'encoding, 'parent, B>,
-  ) -> Result<Self, EpeeError> {
-    match entry.kind() {
-      Type::Uint8 => Ok(entry.to_i8()?.into()),
-      Type::Uint16 => Ok(entry.to_i16()?.into()),
-      _ => entry.to_i32(),
-    }
+impl JsonDeserialize for i32 {
+  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
+    value: Value<'bytes, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'bytes, B, S>> {
+    value.as_i64()?.try_into().map_err(|_| JsonError::TypeError)
   }
 }
-impl EpeeDecode for i64 {
-  fn decode<'encoding, 'parent, B: BytesLike<'encoding>>(
-    entry: EpeeEntry<'encoding, 'parent, B>,
-  ) -> Result<Self, EpeeError> {
-    match entry.kind() {
-      Type::Uint8 => Ok(entry.to_i8()?.into()),
-      Type::Uint16 => Ok(entry.to_i16()?.into()),
-      Type::Uint32 => Ok(entry.to_i32()?.into()),
-      _ => entry.to_i64(),
-    }
+impl JsonDeserialize for i64 {
+  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
+    value: Value<'bytes, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'bytes, B, S>> {
+    value.as_i64()
   }
 }
 
-impl EpeeDecode for u8 {
-  fn decode<'encoding, 'parent, B: BytesLike<'encoding>>(
-    entry: EpeeEntry<'encoding, 'parent, B>,
-  ) -> Result<Self, EpeeError> {
-    entry.to_u8()
+impl JsonDeserialize for u8 {
+  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
+    value: Value<'bytes, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'bytes, B, S>> {
+    value.as_i64()?.try_into().map_err(|_| JsonError::TypeError)
   }
 }
-impl EpeeDecode for u16 {
-  fn decode<'encoding, 'parent, B: BytesLike<'encoding>>(
-    entry: EpeeEntry<'encoding, 'parent, B>,
-  ) -> Result<Self, EpeeError> {
-    match entry.kind() {
-      Type::Uint8 => Ok(entry.to_u8()?.into()),
-      _ => entry.to_u16(),
-    }
+impl JsonDeserialize for u16 {
+  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
+    value: Value<'bytes, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'bytes, B, S>> {
+    value.as_i64()?.try_into().map_err(|_| JsonError::TypeError)
   }
 }
-impl EpeeDecode for u32 {
-  fn decode<'encoding, 'parent, B: BytesLike<'encoding>>(
-    entry: EpeeEntry<'encoding, 'parent, B>,
-  ) -> Result<Self, EpeeError> {
-    match entry.kind() {
-      Type::Uint8 => Ok(entry.to_u8()?.into()),
-      Type::Uint16 => Ok(entry.to_u16()?.into()),
-      _ => entry.to_u32(),
-    }
+impl JsonDeserialize for u32 {
+  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
+    value: Value<'bytes, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'bytes, B, S>> {
+    value.as_i64()?.try_into().map_err(|_| JsonError::TypeError)
   }
 }
-impl EpeeDecode for u64 {
-  fn decode<'encoding, 'parent, B: BytesLike<'encoding>>(
-    entry: EpeeEntry<'encoding, 'parent, B>,
-  ) -> Result<Self, EpeeError> {
-    match entry.kind() {
-      Type::Uint8 => Ok(entry.to_u8()?.into()),
-      Type::Uint16 => Ok(entry.to_u16()?.into()),
-      Type::Uint32 => Ok(entry.to_u32()?.into()),
-      _ => entry.to_u64(),
-    }
+impl JsonDeserialize for u64 {
+  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
+    value: Value<'bytes, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'bytes, B, S>> {
+    value.as_i64()?.try_into().map_err(|_| JsonError::TypeError)
   }
 }
 
-impl EpeeDecode for f64 {
-  fn decode<'encoding, 'parent, B: BytesLike<'encoding>>(
-    entry: EpeeEntry<'encoding, 'parent, B>,
-  ) -> Result<Self, EpeeError> {
-    entry.to_f64()
+impl JsonDeserialize for f64 {
+  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
+    value: Value<'bytes, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'bytes, B, S>> {
+    value.as_f64()
   }
 }
 
-impl EpeeDecode for bool {
-  fn decode<'encoding, 'parent, B: BytesLike<'encoding>>(
-    entry: EpeeEntry<'encoding, 'parent, B>,
-  ) -> Result<Self, EpeeError> {
-    entry.to_bool()
+impl JsonDeserialize for bool {
+  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
+    value: Value<'bytes, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'bytes, B, S>> {
+    value.as_bool()
   }
 }
