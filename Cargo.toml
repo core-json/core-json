@@ -9,6 +9,7 @@ members = [
   "tests/serde_json",
   "tests/JSON_checker",
   "tests/JSONTestSuite",
+  "tests/JSON-Schema-Test-Suite",
 ]
 
 [profile.release]
