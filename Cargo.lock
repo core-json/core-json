@@ -13,6 +13,15 @@ name = "core-json"
 version = "0.1.0"
 
 [[package]]
+name = "core-json-JSON_checker-tests"
+version = "0.1.0"
+dependencies = [
+ "core-json",
+ "core-json-serde_json-tests",
+ "serde_json",
+]
+
+[[package]]
 name = "core-json-derive"
 version = "0.1.0"
 dependencies = [

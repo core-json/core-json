@@ -9,11 +9,12 @@ extern crate alloc;
 mod io;
 mod stack;
 mod string;
+mod number;
 
 pub(crate) use io::*;
 pub use io::BytesLike;
 pub use stack::*;
-pub(crate) use string::*;
+use string::*;
 
 /// An error incurred when deserializing.
 #[derive(Debug)]
@@ -46,6 +47,41 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Clone for JsonError<'bytes, B, S> {
 }
 impl<'bytes, B: BytesLike<'bytes>, S: Stack> Copy for JsonError<'bytes, B, S> {}
 
+/// Interpret the immediate value within the bytes as a `bool`.
+#[inline(always)]
+pub fn as_bool<'bytes, B: BytesLike<'bytes>, S: Stack>(
+  bytes: &B,
+) -> Result<bool, JsonError<'bytes, B, S>> {
+  let first = bytes.peek(0).ok();
+  let second = bytes.peek(1).ok();
+  let third = bytes.peek(2).ok();
+  let fourth = bytes.peek(3).ok();
+  let fifth = bytes.peek(4).ok();
+
+  let is_true = (first, second, third, fourth) == (Some(b't'), Some(b'r'), Some(b'u'), Some(b'e'));
+  let is_false = (first, second, third, fourth, fifth) ==
+    (Some(b'f'), Some(b'a'), Some(b'l'), Some(b's'), Some(b'e'));
+
+  if !(is_true | is_false) {
+    Err(JsonError::TypeError)?;
+  }
+
+  Ok(is_true)
+}
+
+/// Check if the immediate value within the bytes is `null`.
+#[inline(always)]
+pub fn is_null<'bytes, B: BytesLike<'bytes>, S: Stack>(
+  bytes: &B,
+) -> Result<bool, JsonError<'bytes, B, S>> {
+  let first = bytes.peek(0).ok();
+  let second = bytes.peek(1).ok();
+  let third = bytes.peek(2).ok();
+  let fourth = bytes.peek(3).ok();
+
+  Ok((first, second, third, fourth) == (Some(b'n'), Some(b'u'), Some(b'l'), Some(b'l')))
+}
+
 /// Advance the bytes until there's a non-whitespace character.
 fn advance_whitespace<'bytes, B: BytesLike<'bytes>, S: Stack>(
   bytes: &mut B,
@@ -65,19 +101,17 @@ fn advance_whitespace<'bytes, B: BytesLike<'bytes>, S: Stack>(
 fn advance_past_comma_or_to_close<'bytes, B: BytesLike<'bytes>, S: Stack>(
   bytes: &mut B,
 ) -> Result<(), JsonError<'bytes, B, S>> {
-  loop {
-    match bytes.peek(0).map_err(JsonError::BytesError)? {
-      b',' => {
-        bytes.advance(1).map_err(JsonError::BytesError)?;
-        advance_whitespace(bytes)?;
-        if matches!(bytes.peek(0).map_err(JsonError::BytesError)?, b']' | b'}') {
-          Err(JsonError::TrailingComma)?;
-        }
-        break;
+  advance_whitespace(bytes)?;
+  match bytes.peek(0).map_err(JsonError::BytesError)? {
+    b',' => {
+      bytes.advance(1).map_err(JsonError::BytesError)?;
+      advance_whitespace(bytes)?;
+      if matches!(bytes.peek(0).map_err(JsonError::BytesError)?, b']' | b'}') {
+        Err(JsonError::TrailingComma)?;
       }
-      b']' | b'}' => break,
-      _ => bytes.advance(1).map_err(JsonError::BytesError)?,
     }
+    b']' | b'}' => {}
+    _ => Err(JsonError::InvalidValue)?,
   }
   Ok(())
 }
@@ -208,7 +242,35 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
           result = SingleStepResult::Unknown(SingleStepUnknownResult::String(read_string(bytes)?));
         }
         // This is a distinct unit value
-        _ => {}
+        _ => {
+          // https://datatracker.ietf.org/doc/html/rfc8259#section-3 defines all possible values
+          let is_number = match number::as_number(bytes) {
+            Ok((len, _)) => Some(len),
+            Err(JsonError::TypeError) => None,
+            Err(e) => Err(e)?,
+          };
+          let is_bool = match as_bool(bytes) {
+            Ok(value) => Some(if value { 4 } else { 5 }),
+            Err(JsonError::TypeError) => None,
+            Err(e) => Err(e)?,
+          };
+          let is_null = match is_null(bytes) {
+            Ok(is_null) => {
+              if is_null {
+                Some(4)
+              } else {
+                None
+              }
+            }
+            Err(e) => Err(e)?,
+          };
+
+          if let Some(len) = is_number.or(is_bool).or(is_null) {
+            bytes.advance(len).map_err(JsonError::BytesError)?;
+          } else {
+            Err(JsonError::InvalidValue)?;
+          }
+        }
       }
 
       // We now have to read past the next comma, or to the next closing of a structure
@@ -239,64 +301,6 @@ pub struct Value<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> {
 
 impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop for Value<'bytes, 'parent, B, S> {
   fn drop(&mut self) {
-    if let Some(deserializer) = self.deserializer.as_ref() {
-      if deserializer.error.is_some() {
-        return;
-      }
-
-      // https://datatracker.ietf.org/doc/html/rfc8259#section-3
-      let is_object = match self.is_object() {
-        Ok(is_object) => is_object,
-        Err(e) => {
-          self.deserializer.as_mut().expect("deserializer is_some").error = Some(e);
-          return;
-        }
-      };
-      let is_array = match self.is_array() {
-        Ok(is_array) => is_array,
-        Err(e) => {
-          self.deserializer.as_mut().expect("deserializer is_some").error = Some(e);
-          return;
-        }
-      };
-      let is_str = match self.is_str() {
-        Ok(is_str) => is_str,
-        Err(e) => {
-          self.deserializer.as_mut().expect("deserializer is_some").error = Some(e);
-          return;
-        }
-      };
-      let is_number = match self.as_f64() {
-        Ok(_) => true,
-        Err(JsonError::TypeError) => false,
-        Err(e) => {
-          self.deserializer.as_mut().expect("deserializer is_some").error = Some(e);
-          return;
-        }
-      };
-      let is_bool = match self.is_str() {
-        Ok(_) => true,
-        Err(JsonError::TypeError) => false,
-        Err(e) => {
-          self.deserializer.as_mut().expect("deserializer is_some").error = Some(e);
-          return;
-        }
-      };
-      let is_null = match self.is_null() {
-        Ok(is_null) => is_null,
-        Err(e) => {
-          self.deserializer.as_mut().expect("deserializer is_some").error = Some(e);
-          return;
-        }
-      };
-
-      if !(is_object || is_array || is_str || is_number || is_bool || is_null) {
-        self.deserializer.as_mut().expect("deserializer is_some").error =
-          Some(JsonError::InvalidValue);
-        return;
-      }
-    }
-
     /*
       When this value is dropped, we advance the deserializer past it if it hasn't already been
       converted into a `FieldIterator` or `ArrayIterator` (which each have their own `Drop`
@@ -378,7 +382,11 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Deserializer<'bytes, B, S> {
     if self.stack.depth() != 1 {
       Err(JsonError::ReusedDeserializer)?;
     }
-    Ok(Value { deserializer: Some(self) })
+    let result = Value { deserializer: Some(self) };
+    if !(result.is_object()? || result.is_array()?) {
+      Err(JsonError::TypeError)?;
+    }
+    Ok(result)
   }
 }
 
@@ -661,127 +669,18 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
   /// Get the current item as an `f64`.
   #[inline(always)]
   pub fn as_f64(&self) -> Result<f64, JsonError<'bytes, B, S>> {
-    let bytes = &self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes;
-
-    /*
-      https://datatracker.ietf.org/doc/html/rfc8259#section-6 lets us specify the range, precision
-      of numbers. We take advantage of this to only work with floats where the sum of the integer's
-      length, sum of the fraction's length, and exponent's length fits within the following bound.
-    */
-    const MAX_FLOAT_LEN: usize = 128;
-    let mut str: [u8; MAX_FLOAT_LEN] = [0; MAX_FLOAT_LEN];
-
-    let mut i = 0;
-    let mut frac = None;
-    let mut has_exponent = false;
-    let mut immediately_after_e = false;
-    let mut first_char_in_int = None;
-    loop {
-      let char = bytes.peek(i).map_err(|_| JsonError::TypeError)?;
-      // https://datatracker.ietf.org/doc/html/rfc8259#section-6
-      match char {
-        // `-` must be at the beginning of the number or immediately following the exponent
-        b'-' => {
-          if !((i == 0) || immediately_after_e) {
-            Err(JsonError::TypeError)?
-          }
-        }
-        // `+` must be immediately following the exponent
-        b'+' => {
-          if !immediately_after_e {
-            Err(JsonError::TypeError)?
-          }
-        }
-        b'0' => first_char_in_int = first_char_in_int.or(Some(char)),
-        // `0-9`
-        b'1' ..= b'9' => {
-          // If we are still within the integer part of the number...
-          if !(frac.is_some() || has_exponent) {
-            // Require there not be a leading zero
-            if first_char_in_int == Some(b'0') {
-              Err(JsonError::TypeError)?
-            }
-            first_char_in_int = first_char_in_int.or(Some(char));
-          }
-        }
-        b'.' => {
-          if first_char_in_int.is_none() || frac.is_some() || has_exponent {
-            Err(JsonError::TypeError)?;
-          }
-          frac = Some(i);
-        }
-        b'e' | b'E' => {
-          if first_char_in_int.is_none() || has_exponent {
-            Err(JsonError::TypeError)?;
-          }
-          // Check if there was a fractional part, it had at least one digit
-          if let Some(frac) = frac {
-            if frac == (i - 1) {
-              Err(JsonError::TypeError)?;
-            }
-          }
-          has_exponent = true;
-        }
-        _ => break,
-      }
-      immediately_after_e = matches!(char, b'e' | b'E');
-      if i == MAX_FLOAT_LEN {
-        Err(JsonError::TypeError)?;
-      }
-      str[i] = char;
-      i += 1;
-    }
-
-    // If there was a fractional part yet no exponent, check it had at least one digit
-    if !has_exponent {
-      if let Some(frac) = frac {
-        if frac == (i - 1) {
-          Err(JsonError::TypeError)?;
-        }
-      }
-    }
-    // If there was an exponent, check it had at least one digit
-    if has_exponent && (!str[i - 1].is_ascii_digit()) {
-      Err(JsonError::TypeError)?;
-    }
-
-    let str = core::str::from_utf8(&str[.. i]).map_err(|_| JsonError::InternalError)?;
-    <f64 as core::str::FromStr>::from_str(str).map_err(|_| JsonError::TypeError)
+    Ok(number::as_number(&self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes)?.1)
   }
 
   /// Get the current item as a `bool`.
   #[inline(always)]
   pub fn as_bool(&self) -> Result<bool, JsonError<'bytes, B, S>> {
-    let bytes = &self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes;
-
-    let first = bytes.peek(0).ok();
-    let second = bytes.peek(1).ok();
-    let third = bytes.peek(2).ok();
-    let fourth = bytes.peek(3).ok();
-    let fifth = bytes.peek(4).ok();
-
-    let is_true =
-      (first, second, third, fourth) == (Some(b't'), Some(b'r'), Some(b'u'), Some(b'e'));
-    let is_false = (first, second, third, fourth, fifth) ==
-      (Some(b'f'), Some(b'a'), Some(b'l'), Some(b's'), Some(b'e'));
-
-    if !(is_true | is_false) {
-      Err(JsonError::TypeError)?;
-    }
-
-    Ok(is_true)
+    as_bool(&self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes)
   }
 
   /// Check if the current item is `null`.
   #[inline(always)]
   pub fn is_null(&self) -> Result<bool, JsonError<'bytes, B, S>> {
-    let bytes = &self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes;
-
-    let first = bytes.peek(0).ok();
-    let second = bytes.peek(1).ok();
-    let third = bytes.peek(2).ok();
-    let fourth = bytes.peek(3).ok();
-
-    Ok((first, second, third, fourth) == (Some(b'n'), Some(b'u'), Some(b'l'), Some(b'l')))
+    is_null(&self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes)
   }
 }

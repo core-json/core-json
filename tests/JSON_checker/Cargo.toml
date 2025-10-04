@@ -1,0 +1,23 @@
+[package]
+name = "core-json-JSON_checker-tests"
+version = "0.1.0"
+description = "A fuzz tester for `core-json` relying on `JSON_checker`'s test suite'"
+license = "MIT"
+repository = "https://github.com/kayabaNerve/core-json/tree/main/tests/JSON_checker"
+authors = ["Luke Parker <lukeparker5132@gmail.com>"]
+keywords = ["nostd", "no_std", "alloc"]
+edition = "2021"
+publish = false
+rust-version = "1.65"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[dependencies]
+core-json = { path = "../../core" }
+serde_json = "1"
+core-json-serde_json-tests = { path = "../serde_json" }
