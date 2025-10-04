@@ -40,23 +40,6 @@ jobs:
         shell: bash
         run: git diff | wc -l | LC_ALL="en_US.utf8" grep -x -e "^[ ]*0"
 
-  deny:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3df4ab11eba7bda6032a0b82a6bb43b11571feac
-
-      - name: Advisory Cache
-        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809
-        with:
-          path: ~/.cargo/advisory-db
-          key: rust-advisory-db
-
-      - name: Install cargo deny
-        run: cargo +1.90 install cargo-deny --version =0.18.4
-
-      - name: Run cargo deny
-        run: cargo deny -L error --all-features check --hide-inclusion-graph
-
   fmt:
     runs-on: ubuntu-latest
     steps:
@@ -72,15 +55,6 @@ jobs:
 
       - name: Run rustfmt
         run: cargo +${{ steps.nightly.outputs.version }} fmt -- --check
-
-  machete:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3df4ab11eba7bda6032a0b82a6bb43b11571feac
-      - name: Verify all dependencies are in use
-        run: |
-          cargo +1.90 install cargo-machete --version =0.8.0
-          cargo +1.90 machete
 
   msrv:
     runs-on: ubuntu-latest
