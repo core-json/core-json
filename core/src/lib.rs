@@ -635,43 +635,21 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
   }
 
   /// Get the current item as an `i64`.
+  ///
+  /// This uses the definition of a number defined in RFC 8259, then constrains it to having no
+  /// fractional, exponent parts. Then, it's yielded if it's representable within an `i64`.
+  ///
+  /// This is _exact_. It does not go through `f64` and does not experience its approximations.
   #[inline(always)]
   pub fn as_i64(&self) -> Result<i64, JsonError<'bytes, B, S>> {
     let bytes = &self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes;
 
-    let mut res: i64 = 0;
-    let mut negative = false;
-
-    let mut i = 0;
-    loop {
-      let digit = bytes.peek(i).map_err(|_| JsonError::TypeError)?;
-      #[allow(clippy::match_same_arms)]
-      match digit {
-        b'-' => {
-          if i != 0 {
-            Err(JsonError::TypeError)?;
-          }
-          negative = true;
-        }
-        b'0' ..= b'9' => {
-          res = res.checked_mul(10).ok_or(JsonError::TypeError)?;
-          res = res.checked_add((digit - b'0').into()).ok_or(JsonError::TypeError)?
-        }
-        b',' | b']' | b'}' => break,
-        // Float
-        b'.' => Err(JsonError::TypeError)?,
-        // This may be an invalid integer or it could be whitespace before the object's terminator
-        // As we assume this is valid JSON, we assume it's a valid integer
-        _ => break,
-      }
-      i += 1;
+    let (i, str) = number::as_number_str(bytes)?;
+    let str = core::str::from_utf8(&str[.. i]).map_err(|_| JsonError::InternalError)?;
+    if str.contains('.') || str.contains('e') {
+      Err(JsonError::TypeError)?;
     }
-
-    if negative {
-      res = res.checked_neg().ok_or(JsonError::TypeError)?;
-    }
-
-    Ok(res)
+    <i64 as core::str::FromStr>::from_str(str).map_err(|_| JsonError::TypeError)
   }
 
   /// Get the current item as an `f64`.

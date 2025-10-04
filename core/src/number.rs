@@ -1,17 +1,19 @@
 use crate::{BytesLike, Stack, JsonError};
 
+/*
+  https://datatracker.ietf.org/doc/html/rfc8259#section-6 lets us specify the range, precision of
+  numbers. We take advantage of this to only work with floats where the sum of the integer's
+  length, sum of the fraction's length, and exponent's length fits within the following bound.
+*/
+const MAX_FLOAT_LEN: usize = 128;
+
 /// Interpret the immediate value within the bytes as a number.
 ///
-/// Returns the length of the number's serialization and the number as a `f64`.
-pub fn as_number<'bytes, B: BytesLike<'bytes>, S: Stack>(
+/// This returned the length of the number's serialization and an array containing the number's
+/// serialization.
+pub(crate) fn as_number_str<'bytes, B: BytesLike<'bytes>, S: Stack>(
   bytes: &B,
-) -> Result<(usize, f64), JsonError<'bytes, B, S>> {
-  /*
-    https://datatracker.ietf.org/doc/html/rfc8259#section-6 lets us specify the range, precision
-    of numbers. We take advantage of this to only work with floats where the sum of the integer's
-    length, sum of the fraction's length, and exponent's length fits within the following bound.
-  */
-  const MAX_FLOAT_LEN: usize = 128;
+) -> Result<(usize, [u8; MAX_FLOAT_LEN]), JsonError<'bytes, B, S>> {
   let mut str: [u8; MAX_FLOAT_LEN] = [0; MAX_FLOAT_LEN];
 
   let mut i = 0;
@@ -88,6 +90,16 @@ pub fn as_number<'bytes, B: BytesLike<'bytes>, S: Stack>(
     Err(JsonError::TypeError)?;
   }
 
+  Ok((i, str))
+}
+
+/// Interpret the immediate value within the bytes as a number.
+///
+/// Returns the length of the number's serialization and the number as a `f64`.
+pub(crate) fn as_number<'bytes, B: BytesLike<'bytes>, S: Stack>(
+  bytes: &B,
+) -> Result<(usize, f64), JsonError<'bytes, B, S>> {
+  let (i, str) = as_number_str(bytes)?;
   let str = core::str::from_utf8(&str[.. i]).map_err(|_| JsonError::InternalError)?;
   let res = <f64 as core::str::FromStr>::from_str(str).map_err(|_| JsonError::TypeError)?;
   Ok((str.len(), res))
