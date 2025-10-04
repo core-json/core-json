@@ -157,6 +157,12 @@ pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
       let field_name = field_name.expect("couldn't find the name of the field within the `struct`");
       largest_key = largest_key.max(field_name.len());
 
+      for char in field_name.chars() {
+        if !(char.is_ascii_alphanumeric() || (char == '_')) {
+          panic!("character in name of field wasn't supported (A-Za-z0-9_)");
+        }
+      }
+
       all_fields.push_str(&format!(
         r#"
         b"{field_name}" => {{
