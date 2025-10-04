@@ -16,6 +16,19 @@ JSON.
 - Require zero dependencies
 - Additionally offer deserializing into typed structures
 
+### Testing
+
+This library passes [JSON_checker](https://www.json.org/JSON_checker/)'s test
+suite, [JSONTestSuite](https://github.com/nst/JSONTestSuite), and is able to
+deserialize [JSON-Schema-Test-Suite](
+  https://github.com/json-schema-org/JSON-Schema-Test-Suite
+). These are the same test suites identified by
+[`tinyjson`](https://docs.rs/tinyjson) for its testing.
+
+Additionally, we have a fuzz tester which generates random objects via
+`serde_json` before ensuring `core_json` is able to deserialize an equivalent
+structure.
+
 ### Implementation Details
 
 The deserializer is represented using a stack of the current state. The stack
