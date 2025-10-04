@@ -3,6 +3,7 @@ name = "core-json-derive"
 version = "0.1.0"
 description = "`derive` macros for `core-json-traits`"
 license = "MIT"
+repository = "https://github.com/kayabaNerve/core-json/tree/main/derive"
 authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 edition = "2021"
 rust-version = "1.79"

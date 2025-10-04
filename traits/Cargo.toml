@@ -3,6 +3,7 @@ name = "core-json-traits"
 version = "0.1.0"
 description = "Traits for working with `JSON`-serialized objects"
 license = "MIT"
+repository = "https://github.com/kayabaNerve/core-json/tree/main/traits"
 authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 edition = "2021"
 rust-version = "1.65"
