@@ -4,6 +4,7 @@ use crate::{State, Stack};
 #[derive(Debug)]
 struct PackedStates<const ONE_FOURTH_OF_MAX_DEPTH: usize>([u8; ONE_FOURTH_OF_MAX_DEPTH]);
 impl<const ONE_FOURTH_OF_MAX_DEPTH: usize> PackedStates<ONE_FOURTH_OF_MAX_DEPTH> {
+  #[inline(always)]
   fn get(&self, i: usize) -> State {
     let mut entry = self.0[i / 4];
     entry >>= (i & 0b11) * 2;
@@ -17,6 +18,7 @@ impl<const ONE_FOURTH_OF_MAX_DEPTH: usize> PackedStates<ONE_FOURTH_OF_MAX_DEPTH>
     }
   }
 
+  #[inline(always)]
   fn set(&mut self, i: usize, kind: State) {
     let two_bits = match kind {
       State::Object => 0,
@@ -70,6 +72,7 @@ impl<const ONE_FOURTH_OF_MAX_DEPTH: usize> Stack for ConstStack<ONE_FOURTH_OF_MA
     Some(self.items.get(i))
   }
 
+  #[inline(always)]
   fn pop(&mut self) -> Option<State> {
     let i = self.depth.checked_sub(1)?;
     // This will not panic as we know depth can have `1` subtracted.
@@ -78,6 +81,7 @@ impl<const ONE_FOURTH_OF_MAX_DEPTH: usize> Stack for ConstStack<ONE_FOURTH_OF_MA
     Some(self.items.get(i))
   }
 
+  #[inline(always)]
   fn push(&mut self, state: State) -> Result<(), StackError> {
     if self.depth == (4 * ONE_FOURTH_OF_MAX_DEPTH) {
       Err(StackError::StackTooDeep)?;

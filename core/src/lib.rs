@@ -41,6 +41,7 @@ pub enum JsonError<'bytes, B: BytesLike<'bytes>, S: Stack> {
   TypeError,
 }
 impl<'bytes, B: BytesLike<'bytes>, S: Stack> Clone for JsonError<'bytes, B, S> {
+  #[inline(always)]
   fn clone(&self) -> Self {
     *self
   }
@@ -83,6 +84,7 @@ pub fn is_null<'bytes, B: BytesLike<'bytes>, S: Stack>(
 }
 
 /// Advance the bytes until there's a non-whitespace character.
+#[inline(always)]
 fn advance_whitespace<'bytes, B: BytesLike<'bytes>, S: Stack>(
   bytes: &mut B,
 ) -> Result<(), JsonError<'bytes, B, S>> {
@@ -378,6 +380,7 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Deserializer<'bytes, B, S> {
   /// deserializer's state. However, this is not eligible to be called more than once, even after
   /// the initial mutable borrow is dropped. Multiple calls to this function will cause an error to
   /// be returned.
+  #[inline(always)]
   pub fn value(&mut self) -> Result<Value<'bytes, '_, B, S>, JsonError<'bytes, B, S>> {
     if self.stack.depth() != 1 {
       Err(JsonError::ReusedDeserializer)?;
@@ -540,6 +543,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> ArrayIterator<'bytes, 'par
 
 impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, S> {
   /// Check if the current item is an object.
+  #[inline(always)]
   pub fn is_object(&self) -> Result<bool, JsonError<'bytes, B, S>> {
     Ok(
       self
@@ -571,6 +575,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
   }
 
   /// Check if the current item is an array.
+  #[inline(always)]
   pub fn is_array(&self) -> Result<bool, JsonError<'bytes, B, S>> {
     Ok(
       self
@@ -602,6 +607,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
   }
 
   /// Check if the current item is a string.
+  #[inline(always)]
   pub fn is_str(&self) -> Result<bool, JsonError<'bytes, B, S>> {
     Ok(
       self
