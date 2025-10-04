@@ -1,6 +1,10 @@
 # core-json
 
-A no-`std` no-`alloc` JSON deserializer.
+A non-allocating no-`std` JSON deserializer.
+
+These crates follow the
+[RFC 8259](https://datatracker.ietf.org/doc/html/rfc8259) specification of
+JSON.
 
 ### Goals
 
@@ -11,12 +15,6 @@ A no-`std` no-`alloc` JSON deserializer.
 - Use a minimal amount of memory
 - Require zero dependencies
 - Additionally offer deserializing into typed structures
-
-### Non-Goals
-
-- Assert the deserialized JSON is valid. While some checks are performed for
-  the sanity of deserialization, this is not intended to reject inputs other
-  deserializers would likely reject
 
 ### Implementation Details
 

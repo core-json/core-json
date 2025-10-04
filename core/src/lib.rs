@@ -8,10 +8,12 @@ extern crate alloc;
 
 mod io;
 mod stack;
+mod string;
 
 pub(crate) use io::*;
 pub use io::BytesLike;
 pub use stack::*;
+pub(crate) use string::*;
 
 /// An error incurred when deserializing.
 #[derive(Debug)]
@@ -24,15 +26,14 @@ pub enum JsonError<'bytes, B: BytesLike<'bytes>, S: Stack> {
   StackError(S::Error),
   /// The deserializer was reused.
   ReusedDeserializer,
-  /// The serialization was not valid UTF-8.
-  ///
-  /// Serializations are not checked to be valid UTF-8. Incorrect UTF-8 may be detected and raise
-  /// this error however.
-  NotUtf8,
   /// The JSON had an invalid key.
   InvalidKey,
   /// The JSON had an invalid delimiter between the key and value (`:` expected).
   InvalidKeyValueDelimiter,
+  /// The JSON had an invalid value.
+  InvalidValue,
+  /// The JSON had a trailing comma.
+  TrailingComma,
   /// The JSON had mismatched delimiters between the open and close of the structure.
   MismatchedDelimiter,
   /// Operation could not be performed given the value's type.
@@ -45,40 +46,17 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Clone for JsonError<'bytes, B, S> {
 }
 impl<'bytes, B: BytesLike<'bytes>, S: Stack> Copy for JsonError<'bytes, B, S> {}
 
-/// Peek a UTF-8 codepoint from bytes.
-fn peek_utf8<'bytes, B: BytesLike<'bytes>, S: Stack>(
-  bytes: &B,
-) -> Result<(usize, char), JsonError<'bytes, B, S>> {
-  let mut utf8_codepoint = [0; 4];
-  utf8_codepoint[0] = bytes.peek(0).map_err(JsonError::BytesError)?;
-  let utf8_codepoint_len = usize::from({
-    let first_bit_set = (utf8_codepoint[0] & (1 << 7)) != 0;
-    let third_bit_set = (utf8_codepoint[0] & (1 << 5)) != 0;
-    let fourth_bit_set = (utf8_codepoint[0] & (1 << 4)) != 0;
-    1u8 +
-      u8::from(first_bit_set) +
-      u8::from(first_bit_set & third_bit_set) +
-      u8::from(first_bit_set & third_bit_set & fourth_bit_set)
-  });
-  let utf8_codepoint = &mut utf8_codepoint[.. utf8_codepoint_len];
-  for (i, byte) in utf8_codepoint[1 ..].iter_mut().enumerate() {
-    *byte = bytes.peek(i).map_err(JsonError::BytesError)?;
-  }
-
-  let str = core::str::from_utf8(utf8_codepoint).map_err(|_| JsonError::NotUtf8)?;
-  Ok((utf8_codepoint_len, str.chars().next().ok_or(JsonError::InternalError)?))
-}
-
 /// Advance the bytes until there's a non-whitespace character.
 fn advance_whitespace<'bytes, B: BytesLike<'bytes>, S: Stack>(
   bytes: &mut B,
 ) -> Result<(), JsonError<'bytes, B, S>> {
   loop {
-    let (utf8_codepoint_len, char) = peek_utf8(bytes)?;
-    if !char.is_whitespace() {
+    let next = bytes.peek(0).map_err(JsonError::BytesError)?;
+    // https://datatracker.ietf.org/doc/html/rfc8259#section-2 defines whitespace as follows
+    if !matches!(next, b'\x20' | b'\x09' | b'\x0A' | b'\x0D') {
       break;
     }
-    bytes.advance(utf8_codepoint_len).map_err(JsonError::BytesError)?;
+    bytes.advance(1).map_err(JsonError::BytesError)?;
   }
   Ok(())
 }
@@ -92,6 +70,9 @@ fn advance_past_comma_or_to_close<'bytes, B: BytesLike<'bytes>, S: Stack>(
       b',' => {
         bytes.advance(1).map_err(JsonError::BytesError)?;
         advance_whitespace(bytes)?;
+        if matches!(bytes.peek(0).map_err(JsonError::BytesError)?, b']' | b'}') {
+          Err(JsonError::TrailingComma)?;
+        }
         break;
       }
       b']' | b'}' => break,
@@ -170,7 +151,7 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
       if next != b'"' {
         Err(JsonError::InvalidKey)?;
       }
-      let key = read_string(bytes).map_err(JsonError::BytesError)?;
+      let key = read_string(bytes)?;
 
       // Read the colon delimiter
       advance_whitespace::<_, S>(bytes)?;
@@ -224,9 +205,7 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
         b'"' => {
           bytes.advance(1).map_err(JsonError::BytesError)?;
           // Read past the string
-          result = SingleStepResult::Unknown(SingleStepUnknownResult::String(
-            read_string(bytes).map_err(JsonError::BytesError)?,
-          ));
+          result = SingleStepResult::Unknown(SingleStepUnknownResult::String(read_string(bytes)?));
         }
         // This is a distinct unit value
         _ => {}
@@ -260,6 +239,64 @@ pub struct Value<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> {
 
 impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop for Value<'bytes, 'parent, B, S> {
   fn drop(&mut self) {
+    if let Some(deserializer) = self.deserializer.as_ref() {
+      if deserializer.error.is_some() {
+        return;
+      }
+
+      // https://datatracker.ietf.org/doc/html/rfc8259#section-3
+      let is_object = match self.is_object() {
+        Ok(is_object) => is_object,
+        Err(e) => {
+          self.deserializer.as_mut().expect("deserializer is_some").error = Some(e);
+          return;
+        }
+      };
+      let is_array = match self.is_array() {
+        Ok(is_array) => is_array,
+        Err(e) => {
+          self.deserializer.as_mut().expect("deserializer is_some").error = Some(e);
+          return;
+        }
+      };
+      let is_str = match self.is_str() {
+        Ok(is_str) => is_str,
+        Err(e) => {
+          self.deserializer.as_mut().expect("deserializer is_some").error = Some(e);
+          return;
+        }
+      };
+      let is_number = match self.as_f64() {
+        Ok(_) => true,
+        Err(JsonError::TypeError) => false,
+        Err(e) => {
+          self.deserializer.as_mut().expect("deserializer is_some").error = Some(e);
+          return;
+        }
+      };
+      let is_bool = match self.is_str() {
+        Ok(_) => true,
+        Err(JsonError::TypeError) => false,
+        Err(e) => {
+          self.deserializer.as_mut().expect("deserializer is_some").error = Some(e);
+          return;
+        }
+      };
+      let is_null = match self.is_null() {
+        Ok(is_null) => is_null,
+        Err(e) => {
+          self.deserializer.as_mut().expect("deserializer is_some").error = Some(e);
+          return;
+        }
+      };
+
+      if !(is_object || is_array || is_str || is_number || is_bool || is_null) {
+        self.deserializer.as_mut().expect("deserializer is_some").error =
+          Some(JsonError::InvalidValue);
+        return;
+      }
+    }
+
     /*
       When this value is dropped, we advance the deserializer past it if it hasn't already been
       converted into a `FieldIterator` or `ArrayIterator` (which each have their own `Drop`
@@ -570,7 +607,8 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
 
   /// Get the current item as a 'string' (represented as a `B`).
   ///
-  /// This will NOT de-escape the string in any way.
+  /// This will NOT de-escape the string in any way, returning a view of the bytes underlying the
+  /// serialization.
   #[inline(always)]
   pub fn to_str(mut self) -> Result<String<'bytes, B>, JsonError<'bytes, B, S>> {
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
@@ -625,23 +663,89 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
   pub fn as_f64(&self) -> Result<f64, JsonError<'bytes, B, S>> {
     let bytes = &self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes;
 
+    /*
+      https://datatracker.ietf.org/doc/html/rfc8259#section-6 lets us specify the range, precision
+      of numbers. We take advantage of this to only work with floats where the sum of the integer's
+      length, sum of the fraction's length, and exponent's length fits within the following bound.
+    */
     const MAX_FLOAT_LEN: usize = 128;
     let mut str: [u8; MAX_FLOAT_LEN] = [0; MAX_FLOAT_LEN];
 
     let mut i = 0;
+    let mut frac = None;
+    let mut has_exponent = false;
+    let mut immediately_after_e = false;
+    let mut first_char_in_int = None;
     loop {
-      let digit = bytes.peek(i).map_err(|_| JsonError::TypeError)?;
-      if !matches!(digit, b'+' | b'-' | b'.' | b'e' | b'0' ..= b'9') {
-        break;
+      let char = bytes.peek(i).map_err(|_| JsonError::TypeError)?;
+      // https://datatracker.ietf.org/doc/html/rfc8259#section-6
+      match char {
+        // `-` must be at the beginning of the number or immediately following the exponent
+        b'-' => {
+          if !((i == 0) || immediately_after_e) {
+            Err(JsonError::TypeError)?
+          }
+        }
+        // `+` must be immediately following the exponent
+        b'+' => {
+          if !immediately_after_e {
+            Err(JsonError::TypeError)?
+          }
+        }
+        b'0' => first_char_in_int = first_char_in_int.or(Some(char)),
+        // `0-9`
+        b'1' ..= b'9' => {
+          // If we are still within the integer part of the number...
+          if !(frac.is_some() || has_exponent) {
+            // Require there not be a leading zero
+            if first_char_in_int == Some(b'0') {
+              Err(JsonError::TypeError)?
+            }
+            first_char_in_int = first_char_in_int.or(Some(char));
+          }
+        }
+        b'.' => {
+          if first_char_in_int.is_none() || frac.is_some() || has_exponent {
+            Err(JsonError::TypeError)?;
+          }
+          frac = Some(i);
+        }
+        b'e' | b'E' => {
+          if first_char_in_int.is_none() || has_exponent {
+            Err(JsonError::TypeError)?;
+          }
+          // Check if there was a fractional part, it had at least one digit
+          if let Some(frac) = frac {
+            if frac == (i - 1) {
+              Err(JsonError::TypeError)?;
+            }
+          }
+          has_exponent = true;
+        }
+        _ => break,
       }
+      immediately_after_e = matches!(char, b'e' | b'E');
       if i == MAX_FLOAT_LEN {
         Err(JsonError::TypeError)?;
       }
-      str[i] = digit;
+      str[i] = char;
       i += 1;
     }
 
-    let str = core::str::from_utf8(&str[.. i]).map_err(|_| JsonError::NotUtf8)?.trim();
+    // If there was a fractional part yet no exponent, check it had at least one digit
+    if !has_exponent {
+      if let Some(frac) = frac {
+        if frac == (i - 1) {
+          Err(JsonError::TypeError)?;
+        }
+      }
+    }
+    // If there was an exponent, check it had at least one digit
+    if has_exponent && (!str[i - 1].is_ascii_digit()) {
+      Err(JsonError::TypeError)?;
+    }
+
+    let str = core::str::from_utf8(&str[.. i]).map_err(|_| JsonError::InternalError)?;
     <f64 as core::str::FromStr>::from_str(str).map_err(|_| JsonError::TypeError)
   }
 

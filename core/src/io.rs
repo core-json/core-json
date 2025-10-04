@@ -125,34 +125,3 @@ impl<'bytes, B: BytesLike<'bytes>> String<'bytes, B> {
     self.bytes
   }
 }
-
-/// Read a just-opened string from a JSON serialization.
-pub(crate) fn read_string<'bytes, B: BytesLike<'bytes>>(
-  bytes: &mut B,
-) -> Result<String<'bytes, B>, B::Error> {
-  // Find the location of the terminating quote
-  let mut i = 0;
-  {
-    let mut prior = None;
-    loop {
-      let this = bytes.peek(i)?;
-      // This is UTF-8 compatible as multi-byte codepoints which always have leading `1` bits, and
-      // these values are < 128 (being ASCII)
-      if (prior != Some(b'\\')) && (this == b'"') {
-        break;
-      }
-      // If this is an escape sequence, handle if it itself is escaped
-      if (this == b'\\') && (prior == Some(b'\\')) {
-        prior = None;
-      } else {
-        prior = Some(this);
-      }
-      i += 1;
-    }
-  }
-
-  let (len, str_bytes) = bytes.read_bytes(i)?;
-  // Advance past the closing `"`
-  bytes.advance(1)?;
-  Ok(String { len, bytes: str_bytes, _encoding: PhantomData })
-}
