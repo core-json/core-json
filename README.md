@@ -63,6 +63,12 @@ to `serde_json` by everyone who doesn't explicitly need `serde_json`.
 (for `std::collections::HashMap`) and doesn't support deserializing into typed
 structures. It also will allocate as it deserializes.
 
+[`serde-json-core`](https://docs.rs/serde-json-core) is akin to `serde-json`,
+still depending on `serde`, yet only requiring `core`. It does not support
+dynamic typing with a `serde_json::Value` analogue (as `core-json` does) nor
+does it support handling unknown fields within objects (which `core-json` does
+to a bounded depth).
+
 ### History
 
 There's a bespoke self-describing binary format whose implementations have
