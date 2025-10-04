@@ -8,7 +8,7 @@ authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 keywords = ["nostd", "no_std", "alloc"]
 edition = "2021"
 publish = false
-rust-version = "1.89"
+rust-version = "1.79"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -23,4 +23,4 @@ core-json-traits = { path = "../../traits" }
 core-json-derive = { path = "../../derive" }
 
 [features]
-alloc = ["core-json-traits/alloc", "core-json-derive/alloc"]
+alloc = ["core-json-traits/alloc"]
