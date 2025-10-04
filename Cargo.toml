@@ -8,6 +8,7 @@ members = [
   "tests/no-std",
   "tests/serde_json",
   "tests/JSON_checker",
+  "tests/JSONTestSuite",
 ]
 
 [profile.release]

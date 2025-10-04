@@ -554,6 +554,8 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
   }
 
   /// Iterate over the fields within this object.
+  ///
+  /// If a field is present multiple times, this will yield each instance.
   pub fn fields(mut self) -> Result<FieldIterator<'bytes, 'parent, B, S>, JsonError<'bytes, B, S>> {
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
     if let Some(err) = deserializer.error {

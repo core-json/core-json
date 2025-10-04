@@ -87,7 +87,7 @@ fn check_number(encoding: &[u8], value: &Value, path: &[PathElement]) {
       let expected = expected.as_f64().unwrap();
       // 0.1% of the smaller number
       let allowed_deviation = number.min(expected).abs() / 1000.0;
-      assert!((number - expected).abs() < allowed_deviation);
+      assert!((number - expected).abs() <= allowed_deviation);
     }
   });
 }
