@@ -45,45 +45,83 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Clone for JsonError<'bytes, B, S> {
 }
 impl<'bytes, B: BytesLike<'bytes>, S: Stack> Copy for JsonError<'bytes, B, S> {}
 
+/// Peek a UTF-8 codepoint from bytes.
+fn peek_utf8<'bytes, B: BytesLike<'bytes>, S: Stack>(
+  bytes: &B,
+) -> Result<(usize, char), JsonError<'bytes, B, S>> {
+  let mut utf8_codepoint = [0; 4];
+  utf8_codepoint[0] = bytes.peek(0).map_err(JsonError::BytesError)?;
+  let utf8_codepoint_len = usize::from({
+    let first_bit_set = (utf8_codepoint[0] & (1 << 7)) != 0;
+    let third_bit_set = (utf8_codepoint[0] & (1 << 5)) != 0;
+    let fourth_bit_set = (utf8_codepoint[0] & (1 << 4)) != 0;
+    1u8 +
+      u8::from(first_bit_set) +
+      u8::from(first_bit_set & third_bit_set) +
+      u8::from(first_bit_set & third_bit_set & fourth_bit_set)
+  });
+  let utf8_codepoint = &mut utf8_codepoint[.. utf8_codepoint_len];
+  for (i, byte) in utf8_codepoint[1 ..].iter_mut().enumerate() {
+    *byte = bytes.peek(i).map_err(JsonError::BytesError)?;
+  }
+
+  let str = core::str::from_utf8(utf8_codepoint).map_err(|_| JsonError::NotUtf8)?;
+  Ok((utf8_codepoint_len, str.chars().next().ok_or(JsonError::InternalError)?))
+}
+
+/// Advance the bytes until there's a non-whitespace character.
 fn advance_whitespace<'bytes, B: BytesLike<'bytes>, S: Stack>(
   bytes: &mut B,
 ) -> Result<(), JsonError<'bytes, B, S>> {
   loop {
-    let mut utf8_codepoint = [0; 4];
-    utf8_codepoint[0] = bytes.peek(0).map_err(JsonError::BytesError)?;
-    let utf8_codepoint_len = usize::from({
-      let first_bit_set = (utf8_codepoint[0] & (1 << 7)) != 0;
-      let third_bit_set = (utf8_codepoint[0] & (1 << 5)) != 0;
-      let fourth_bit_set = (utf8_codepoint[0] & (1 << 4)) != 0;
-      1u8 +
-        u8::from(first_bit_set) +
-        u8::from(first_bit_set & third_bit_set) +
-        u8::from(first_bit_set & third_bit_set & fourth_bit_set)
-    });
-    let utf8_codepoint = &mut utf8_codepoint[.. utf8_codepoint_len];
-    for (i, byte) in utf8_codepoint[1 ..].iter_mut().enumerate() {
-      *byte = bytes.peek(i).map_err(JsonError::BytesError)?;
-    }
-
-    let str = core::str::from_utf8(utf8_codepoint).map_err(|_| JsonError::NotUtf8)?;
-    if !str.chars().next().ok_or(JsonError::InternalError)?.is_whitespace() {
+    let (utf8_codepoint_len, char) = peek_utf8(bytes)?;
+    if !char.is_whitespace() {
       break;
     }
     bytes.advance(utf8_codepoint_len).map_err(JsonError::BytesError)?;
   }
-
   Ok(())
 }
 
-/// The result from a single step of the deserializer.
-enum SingleStepResult<'bytes, B: BytesLike<'bytes>> {
-  /// A field within an object was advanced to.
+/// Advance past a comma, or to the close of the structure.
+fn advance_past_comma_or_to_close<'bytes, B: BytesLike<'bytes>, S: Stack>(
+  bytes: &mut B,
+) -> Result<(), JsonError<'bytes, B, S>> {
+  loop {
+    match bytes.peek(0).map_err(JsonError::BytesError)? {
+      b',' => {
+        bytes.advance(1).map_err(JsonError::BytesError)?;
+        advance_whitespace(bytes)?;
+        break;
+      }
+      b']' | b'}' => break,
+      _ => bytes.advance(1).map_err(JsonError::BytesError)?,
+    }
+  }
+  Ok(())
+}
+
+/// The result from a single step of the deserialized, if within an object.
+enum SingleStepObjectResult<'bytes, B: BytesLike<'bytes>> {
+  /// A field within the object was advanced to.
   Field {
     /// The key for this field.
     key: String<'bytes, B>,
   },
-  /// A value within an array was advanced to.
-  ArrayValue,
+  /// The object was closed.
+  Closed,
+}
+
+/// The result from a single step of the deserialized, if within an array.
+enum SingleStepArrayResult {
+  /// A value within the array was advanced to.
+  Value,
+  /// The array was closed.
+  Closed,
+}
+
+/// The result from a single step of the deserializer, if handling an unknown value.
+enum SingleStepUnknownResult<'bytes, B: BytesLike<'bytes>> {
   /// An object was opened.
   ObjectOpened,
   /// An array was opened.
@@ -92,24 +130,40 @@ enum SingleStepResult<'bytes, B: BytesLike<'bytes>> {
   String(String<'bytes, B>),
   /// A unit value was advanced past.
   Advanced,
-  /// An open structure was closed.
-  Closed,
+}
+
+/// The result from a single step of the deserializer.
+enum SingleStepResult<'bytes, B: BytesLike<'bytes>> {
+  /// The result if within an object.
+  Object(SingleStepObjectResult<'bytes, B>),
+  /// The result if within an array.
+  Array(SingleStepArrayResult),
+  /// The result if handling an unknown value.
+  Unknown(SingleStepUnknownResult<'bytes, B>),
 }
 
 /// Step the deserializer forwards.
+///
+/// This assumes there is no leading whitespace present in `bytes` and will advance past any
+/// whitespace present before the next logical unit.
 fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
   bytes: &'parent mut B,
   stack: &'parent mut S,
 ) -> Result<SingleStepResult<'bytes, B>, JsonError<'bytes, B, S>> {
   match stack.peek().ok_or(JsonError::InternalError)? {
     State::Object => {
-      advance_whitespace::<_, S>(bytes)?;
       let next = bytes.read_byte().map_err(JsonError::BytesError)?;
 
       // Check if the object terminates
       if next == b'}' {
         stack.pop().ok_or(JsonError::InternalError)?;
-        return Ok(SingleStepResult::Closed);
+
+        // If this isn't the outer object, advance past the comma after
+        if stack.depth() != 0 {
+          advance_past_comma_or_to_close(bytes)?;
+        }
+
+        return Ok(SingleStepResult::Object(SingleStepObjectResult::Closed));
       }
 
       // Read the name of this field
@@ -127,59 +181,59 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
       // Push how we're reading a value of an unknown type onto the stack
       advance_whitespace::<_, S>(bytes)?;
       stack.push(State::Unknown).map_err(JsonError::StackError)?;
-      Ok(SingleStepResult::Field { key })
+      Ok(SingleStepResult::Object(SingleStepObjectResult::Field { key }))
     }
     State::Array => {
-      advance_whitespace::<_, S>(bytes)?;
-
       // Check if the array terminates
       if bytes.peek(0).map_err(JsonError::BytesError)? == b']' {
         stack.pop().ok_or(JsonError::InternalError)?;
         bytes.advance(1).map_err(JsonError::BytesError)?;
-        return Ok(SingleStepResult::Closed);
+
+        // If this isn't the outer object, advance past the comma after
+        if stack.depth() != 0 {
+          advance_past_comma_or_to_close(bytes)?;
+        }
+
+        return Ok(SingleStepResult::Array(SingleStepArrayResult::Closed));
       }
 
       // Since the array doesn't terminate, read the next value
       stack.push(State::Unknown).map_err(JsonError::StackError)?;
-      Ok(SingleStepResult::ArrayValue)
+      Ok(SingleStepResult::Array(SingleStepArrayResult::Value))
     }
     State::Unknown => {
-      let mut result = SingleStepResult::Advanced;
+      stack.pop().ok_or(JsonError::InternalError)?;
+
+      let mut result = SingleStepResult::Unknown(SingleStepUnknownResult::Advanced);
       match bytes.peek(0).map_err(JsonError::BytesError)? {
         // Handle if this opens an object
         b'{' => {
           bytes.advance(1).map_err(JsonError::BytesError)?;
+          advance_whitespace(bytes)?;
           stack.push(State::Object).map_err(JsonError::StackError)?;
-          return Ok(SingleStepResult::ObjectOpened);
+          return Ok(SingleStepResult::Unknown(SingleStepUnknownResult::ObjectOpened));
         }
         // Handle if this opens an array
         b'[' => {
           bytes.advance(1).map_err(JsonError::BytesError)?;
+          advance_whitespace(bytes)?;
           stack.push(State::Array).map_err(JsonError::StackError)?;
-          return Ok(SingleStepResult::ArrayOpened);
+          return Ok(SingleStepResult::Unknown(SingleStepUnknownResult::ArrayOpened));
         }
         // Handle if this opens an string
         b'"' => {
           bytes.advance(1).map_err(JsonError::BytesError)?;
           // Read past the string
-          result = SingleStepResult::String(read_string(bytes).map_err(JsonError::BytesError)?);
+          result = SingleStepResult::Unknown(SingleStepUnknownResult::String(
+            read_string(bytes).map_err(JsonError::BytesError)?,
+          ));
         }
         // This is a distinct unit value
         _ => {}
       }
 
       // We now have to read past the next comma, or to the next closing of a structure
-      loop {
-        match bytes.peek(0).map_err(JsonError::BytesError)? {
-          b',' => {
-            bytes.advance(1).map_err(JsonError::BytesError)?;
-            break;
-          }
-          b']' | b'}' => break,
-          _ => bytes.advance(1).map_err(JsonError::BytesError)?,
-        }
-      }
-      stack.pop().ok_or(JsonError::InternalError)?;
+      advance_past_comma_or_to_close(bytes)?;
 
       Ok(result)
     }
@@ -190,17 +244,27 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
 pub struct Deserializer<'bytes, B: BytesLike<'bytes>, S: Stack> {
   bytes: B,
   stack: S,
+  /*
+    We advance the deserializer within `Drop` which cannot return an error. If an error is raised
+    within drop, we store it here to be consumed upon the next call to a method which can return an
+    error (if one is ever called).
+  */
   error: Option<JsonError<'bytes, B, S>>,
 }
 
 /// A JSON value.
+// Internally, we assume whenever this is held, the top item on the stack is `State::Unknown`
 pub struct Value<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> {
   deserializer: Option<&'parent mut Deserializer<'bytes, B, S>>,
 }
 
-// When this value is dropped, advance the deserializer past it
 impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop for Value<'bytes, 'parent, B, S> {
   fn drop(&mut self) {
+    /*
+      When this value is dropped, we advance the deserializer past it if it hasn't already been
+      converted into a `FieldIterator` or `ArrayIterator` (which each have their own `Drop`
+      implementations).
+    */
     if let Some(deserializer) = self.deserializer.take() {
       if deserializer.error.is_some() {
         return;
@@ -211,29 +275,30 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop for Value<'bytes, 'pa
         return;
       };
 
-      let mut depth;
-      match current {
-        State::Object | State::Array => depth = 1,
+      let mut depth = match current {
+        State::Object | State::Array => 1,
         State::Unknown => {
           let step = match single_step(&mut deserializer.bytes, &mut deserializer.stack) {
-            Ok(step) => step,
+            Ok(SingleStepResult::Unknown(step)) => step,
+            Ok(_) => {
+              deserializer.error = Some(JsonError::InternalError);
+              return;
+            }
             Err(e) => {
               deserializer.error = Some(e);
               return;
             }
           };
           match step {
-            SingleStepResult::String(_) | SingleStepResult::Advanced => return,
-            SingleStepResult::ObjectOpened | SingleStepResult::ArrayOpened => depth = 1,
-            SingleStepResult::Field { .. } |
-            SingleStepResult::ArrayValue |
-            SingleStepResult::Closed => {
-              deserializer.error = Some(JsonError::InternalError);
-              return;
-            }
+            // We successfully advanced past this item
+            SingleStepUnknownResult::String(_) | SingleStepUnknownResult::Advanced => return,
+            // We opened an object/array we now have to advance past
+            SingleStepUnknownResult::ObjectOpened | SingleStepUnknownResult::ArrayOpened => 1,
           }
         }
-      }
+      };
+
+      // Since our object isn't a unit, step the deserializer until it's advanced past
       while depth != 0 {
         let step = match single_step(&mut deserializer.bytes, &mut deserializer.stack) {
           Ok(step) => step,
@@ -243,12 +308,12 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop for Value<'bytes, 'pa
           }
         };
         match step {
-          SingleStepResult::Field { .. } |
-          SingleStepResult::ArrayValue |
-          SingleStepResult::String(_) |
-          SingleStepResult::Advanced => {}
-          SingleStepResult::ObjectOpened | SingleStepResult::ArrayOpened => depth += 1,
-          SingleStepResult::Closed => depth -= 1,
+          SingleStepResult::Object(SingleStepObjectResult::Closed) |
+          SingleStepResult::Array(SingleStepArrayResult::Closed) => depth -= 1,
+          SingleStepResult::Unknown(
+            SingleStepUnknownResult::ObjectOpened | SingleStepUnknownResult::ArrayOpened,
+          ) => depth += 1,
+          _ => {}
         }
       }
     }
@@ -259,8 +324,10 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Deserializer<'bytes, B, S> {
   /// Create a new deserializer.
   pub fn new(mut bytes: B) -> Result<Self, JsonError<'bytes, B, S>> {
     advance_whitespace(&mut bytes)?;
+
     let mut stack = S::empty();
     stack.push(State::Unknown).map_err(JsonError::StackError)?;
+
     Ok(Deserializer { bytes, stack, error: None })
   }
 
@@ -293,6 +360,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop
     if self.deserializer.error.is_some() {
       return;
     }
+
     loop {
       let Some(next) = self.next() else { break };
       let next = next.map(|_| ());
@@ -336,22 +404,19 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>
     }
 
     loop {
-      match single_step(&mut self.deserializer.bytes, &mut self.deserializer.stack) {
-        Ok(SingleStepResult::Field { key }) => {
+      let result = match single_step(&mut self.deserializer.bytes, &mut self.deserializer.stack) {
+        Ok(SingleStepResult::Object(result)) => result,
+        Ok(_) => break Some(Err(JsonError::InternalError)),
+        Err(e) => break Some(Err(e)),
+      };
+      match result {
+        SingleStepObjectResult::Field { key } => {
           break Some(Ok((key, Value { deserializer: Some(self.deserializer) })))
         }
-        Ok(SingleStepResult::Closed) => {
+        SingleStepObjectResult::Closed => {
           self.done = true;
           None?
         }
-        Ok(SingleStepResult::Advanced) => {}
-        Ok(
-          SingleStepResult::ArrayValue |
-          SingleStepResult::ObjectOpened |
-          SingleStepResult::ArrayOpened |
-          SingleStepResult::String(_),
-        ) => break Some(Err(JsonError::InternalError)),
-        Err(e) => break Some(Err(e)),
       }
     }
   }
@@ -372,6 +437,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop
     if self.deserializer.error.is_some() {
       return;
     }
+
     loop {
       let Some(next) = self.next() else { break };
       let next = next.map(|_| ());
@@ -409,22 +475,19 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> ArrayIterator<'bytes, 'par
     }
 
     loop {
-      match single_step(&mut self.deserializer.bytes, &mut self.deserializer.stack) {
-        Ok(SingleStepResult::ArrayValue) => {
+      let result = match single_step(&mut self.deserializer.bytes, &mut self.deserializer.stack) {
+        Ok(SingleStepResult::Array(result)) => result,
+        Ok(_) => break Some(Err(JsonError::InternalError)),
+        Err(e) => break Some(Err(e)),
+      };
+      match result {
+        SingleStepArrayResult::Value => {
           break Some(Ok(Value { deserializer: Some(self.deserializer) }))
         }
-        Ok(SingleStepResult::Closed) => {
+        SingleStepArrayResult::Closed => {
           self.done = true;
-          None?;
+          None?
         }
-        Ok(SingleStepResult::Advanced) => {}
-        Ok(
-          SingleStepResult::Field { .. } |
-          SingleStepResult::ObjectOpened |
-          SingleStepResult::ArrayOpened |
-          SingleStepResult::String(_),
-        ) => break Some(Err(JsonError::InternalError)),
-        Err(e) => break Some(Err(e)),
       }
     }
   }
@@ -453,7 +516,9 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
     }
 
     match single_step(&mut deserializer.bytes, &mut deserializer.stack)? {
-      SingleStepResult::ObjectOpened => Ok(FieldIterator { deserializer, done: false }),
+      SingleStepResult::Unknown(SingleStepUnknownResult::ObjectOpened) => {
+        Ok(FieldIterator { deserializer, done: false })
+      }
       _ => Err(JsonError::TypeError),
     }
   }
@@ -472,11 +537,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
     )
   }
 
-  /// Get an iterator of all items within this container.
-  ///
-  /// If you want to index a specific item, you may use `.iterate()?.nth(i)?`. An `index` method
-  /// isn't provided as each index operation is of O(n) complexity and single indexes SHOULD NOT be
-  /// used. Only exposing `iterate` attempts to make this clear to the user.
+  /// Iterate over all items within this container.
   pub fn iterate(
     mut self,
   ) -> Result<ArrayIterator<'bytes, 'parent, B, S>, JsonError<'bytes, B, S>> {
@@ -486,7 +547,9 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
     }
 
     match single_step(&mut deserializer.bytes, &mut deserializer.stack)? {
-      SingleStepResult::ArrayOpened => Ok(ArrayIterator { deserializer, done: false }),
+      SingleStepResult::Unknown(SingleStepUnknownResult::ArrayOpened) => {
+        Ok(ArrayIterator { deserializer, done: false })
+      }
       _ => Err(JsonError::TypeError),
     }
   }
@@ -507,12 +570,12 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
 
   /// Get the current item as a 'string' (represented as a `B`).
   ///
-  /// This will NOT de-escape the string.
+  /// This will NOT de-escape the string in any way.
   #[inline(always)]
   pub fn to_str(mut self) -> Result<String<'bytes, B>, JsonError<'bytes, B, S>> {
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
     match single_step(&mut deserializer.bytes, &mut deserializer.stack)? {
-      SingleStepResult::String(str) => Ok(str),
+      SingleStepResult::Unknown(SingleStepUnknownResult::String(str)) => Ok(str),
       _ => Err(JsonError::TypeError),
     }
   }
@@ -563,7 +626,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
     let bytes = &self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes;
 
     const MAX_FLOAT_LEN: usize = 128;
-    let mut dst: [u8; MAX_FLOAT_LEN] = [0; MAX_FLOAT_LEN];
+    let mut str: [u8; MAX_FLOAT_LEN] = [0; MAX_FLOAT_LEN];
 
     let mut i = 0;
     loop {
@@ -574,13 +637,12 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
       if i == MAX_FLOAT_LEN {
         Err(JsonError::TypeError)?;
       }
-      dst[i] = digit;
+      str[i] = digit;
       i += 1;
     }
 
-    use core::str::FromStr;
-    f64::from_str(core::str::from_utf8(&dst[.. i]).map_err(|_| JsonError::NotUtf8)?.trim())
-      .map_err(|_| JsonError::TypeError)
+    let str = core::str::from_utf8(&str[.. i]).map_err(|_| JsonError::NotUtf8)?.trim();
+    <f64 as core::str::FromStr>::from_str(str).map_err(|_| JsonError::TypeError)
   }
 
   /// Get the current item as a `bool`.

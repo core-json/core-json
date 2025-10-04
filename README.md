@@ -10,8 +10,7 @@ A no-`std` no-`alloc` JSON deserializer.
 - Never use `unsafe`
 - Use a minimal amount of memory
 - Require zero dependencies
-- Additionally offer deserializing into typed structures, when allocations are
-  allowed (adding a dependency on `hashbrown` when `alloc` but not `std`)
+- Additionally offer deserializing into typed structures
 
 ### Non-Goals
 
