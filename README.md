@@ -80,6 +80,12 @@ dynamic typing with a `serde_json::Value` analogue (as `core-json` does) nor
 does it support handling unknown fields within objects (which `core-json` does
 to a bounded depth).
 
+If `core-json` does not work for you, please see if `miniserde` works for you.
+If `miniserde` does not work for you, then `serde_json` may be justified. The
+point of this crate, other than a safe and minimal way to perform
+deserialization of JSON objects, is to encourage more light-weight (by
+complexity) alternatives to `serde_json`.
+
 ### History
 
 There's a bespoke self-describing binary format whose implementations have
