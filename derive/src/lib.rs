@@ -67,7 +67,7 @@ fn skip_comma_delimited(iter: &mut Peekable<impl Iterator<Item: Borrow<TokenTree
 /// field was omitted, please wrap it in `Option`.
 ///
 /// As a procedural macro, this will panic causing a compile-time error on any unexpected input.
-#[proc_macro_derive(JsonDeserialize)]
+#[proc_macro_derive(JsonDeserialize, attributes(rename))]
 pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
   let generic_bounds;
   let generics;
@@ -141,9 +141,45 @@ pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
     // Read each field within this `struct`'s body
     while struct_body.peek().is_some() {
       // Access the field name
+      let mut serialization_field_name = None;
       let mut field_name = None;
-      // This loop will ignore attributes successfully
       for item in &mut struct_body {
+        // Hanlde the `rename` attribute
+        if let TokenTree::Group(group) = &item {
+          if group.delimiter() == Delimiter::Bracket {
+            let mut iter = group.stream().into_iter();
+            if iter.next().and_then(|ident| match ident {
+              TokenTree::Ident(ident) => Some(ident.to_string()),
+              _ => None,
+            }) == Some("rename".to_string())
+            {
+              let TokenTree::Group(group) =
+                iter.next().expect("`rename` attribute without arguments")
+              else {
+                panic!("`rename` attribute not followed with `(...)`")
+              };
+              assert_eq!(
+                group.delimiter(),
+                Delimiter::Parenthesis,
+                "`rename` attribute with a non-parentheses group"
+              );
+              assert_eq!(
+                group.stream().into_iter().count(),
+                1,
+                "`rename` attribute with multiple tokens within parentheses"
+              );
+              let TokenTree::Literal(literal) = group.stream().into_iter().next().unwrap() else {
+                panic!("`rename` attribute with a non-literal argument")
+              };
+              let literal = literal.to_string();
+              assert_eq!(literal.chars().next().unwrap(), '"', "literal wasn't a string literal");
+              assert_eq!(literal.chars().last().unwrap(), '"', "literal wasn't a string literal");
+              serialization_field_name =
+                Some(literal.trim_start_matches('"').trim_end_matches('"').to_string());
+            }
+          }
+        }
+
         if let TokenTree::Ident(ident) = item {
           let ident = ident.to_string();
           // Skip the access modifier
@@ -151,21 +187,27 @@ pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
             continue;
           }
           field_name = Some(ident);
+          // Use the field's actual name within the serialization, if not renamed
+          serialization_field_name = serialization_field_name.or(field_name.clone());
           break;
         }
       }
       let field_name = field_name.expect("couldn't find the name of the field within the `struct`");
-      largest_key = largest_key.max(field_name.len());
+      let serialization_field_name =
+        serialization_field_name.expect("`field_name` but no `serialization_field_name`?");
+      largest_key = largest_key.max(serialization_field_name.len());
 
-      for char in field_name.chars() {
+      for char in serialization_field_name.chars() {
         if !(char.is_ascii_alphanumeric() || (char == '_')) {
-          panic!("character in name of field wasn't supported (A-Za-z0-9_)");
+          panic!(
+            "character in name of field wasn't supported (`[A-Za-z0-9_]+` required): `{char}`"
+          );
         }
       }
 
       all_fields.push_str(&format!(
         r#"
-        b"{field_name}" => {{
+        b"{serialization_field_name}" => {{
           result.{field_name} = core_json_traits::JsonDeserialize::deserialize(value)?
         }},
       "#

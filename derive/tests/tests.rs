@@ -12,6 +12,7 @@ struct MyStruct<T: 'static + core::fmt::Debug + Default + JsonDeserialize> {
 
 #[derive(PartialEq, Debug, Default, JsonDeserialize)]
 struct WithoutT {
+  #[rename("xyza")]
   abc: i64,
   de: u8,
   ghij: Vec<u8>,
@@ -63,7 +64,7 @@ fn test_derive() {
       ],
       "klmo":[
         {
-          "abc": -4270612854459681377,
+          "xyza": -4270612854459681377,
           "de": 47,
           "ghij": [
             144, 186, 170, 31, 217, 173, 218, 40, 31, 210, 183, 179, 239, 91, 188, 102, 85, 200,
