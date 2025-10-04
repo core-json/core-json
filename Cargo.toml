@@ -6,7 +6,7 @@ members = [
   "derive",
 
   "tests/no-std",
-  "tests/serde-json",
+  "tests/serde_json",
 ]
 
 [profile.release]
