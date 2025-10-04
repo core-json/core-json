@@ -1,6 +1,6 @@
 [package]
 name = "core-json-derive"
-version = "0.1.0"
+version = "0.1.1"
 description = "`derive` macros for `core-json-traits`"
 license = "MIT"
 repository = "https://github.com/kayabaNerve/core-json/tree/main/derive"
