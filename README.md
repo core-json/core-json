@@ -26,8 +26,8 @@ deserialize [JSON-Schema-Test-Suite](
 [`tinyjson`](https://docs.rs/tinyjson) for its testing.
 
 Additionally, we have a fuzz tester which generates random objects via
-`serde_json` before ensuring `core_json` is able to deserialize an equivalent
-structure.
+[`serde_json`](https://docs.rs/serde_json) before ensuring `core-json` is able
+to deserialize an equivalent structure.
 
 ### Implementation Details
 
