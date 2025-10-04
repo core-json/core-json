@@ -6,7 +6,8 @@ A no-`std` no-`alloc` JSON deserializer.
 
 - Offer a way to deserialize JSON without performing any allocations
 - Never rely on recursion to ensure the stack cannot overflow
-- Never panic, avoiding any/all `unsafe`
+- Never have a reachable panic
+- Never use `unsafe`
 - Use a minimal amount of memory
 - Require zero dependencies
 - Additionally offer deserializing into typed structures, when allocations are
@@ -23,7 +24,7 @@ A no-`std` no-`alloc` JSON deserializer.
 The deserializer is represented using a stack of the current state. The stack
 is parameterized by a constant for the maximum depth allowed for the
 deserialized objects, which will be used for a fixed allocation on the stack.
-The deserializer's state is approximately one byte per allowed nested object.
+The deserializer's state is approximately two bits per allowed nested object.
 
 Optionally, the caller may specify a stack which does dynamically allocate and
 supports an unbounded depth accordingly.
