@@ -646,7 +646,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
 
     let (i, str) = number::as_number_str(bytes)?;
     let str = core::str::from_utf8(&str[.. i]).map_err(|_| JsonError::InternalError)?;
-    if str.contains('.') || str.contains('e') {
+    if str.contains('.') || str.contains('e') || str.contains('E') {
       Err(JsonError::TypeError)?;
     }
     <i64 as core::str::FromStr>::from_str(str).map_err(|_| JsonError::TypeError)
