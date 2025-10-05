@@ -103,8 +103,6 @@ fn check_string(encoding: &[u8], value: &Value, path: &[PathElement]) {
     let string = deserializer.value().unwrap();
     descend(string, path, |string: core_json::Value<_, _>| {
       assert!(string.is_str().unwrap());
-      dbg!(value.to_string());
-      dbg!(value.as_str().unwrap());
       assert!(
         value.as_str().unwrap() == string.to_str().unwrap().collect::<Result<String, _>>().unwrap()
       );
