@@ -139,7 +139,15 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Iterator for UnescapeString<'bytes,
 
         // Handle if this is a unicode codepoint
         b'u' => {
-          let mut read_hex = || {
+          let mut read_hex = |with_u| {
+            if with_u {
+              let mut backslash_u = [0; 2];
+              self.string.read_into_slice(&mut backslash_u).map_err(JsonError::BytesError)?;
+              if &backslash_u != b"\\u" {
+                Err(JsonError::InvalidValue)?;
+              }
+            }
+
             let mut hex = [0; 4];
             self.string.read_into_slice(&mut hex).map_err(JsonError::BytesError)?;
             // `InternalError`: `\u` without following 'hex' bytes being UTF-8
@@ -151,12 +159,12 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Iterator for UnescapeString<'bytes,
           // Read the hex digits
           // `InternalError`: `\u` without following hex bytes
           self.remaining = self.remaining.checked_sub(4).ok_or(JsonError::InternalError)?;
-          let next = read_hex()?;
+          let next = read_hex(false)?;
 
           /*
             If the intended value of this codepoint exceeds 0xffff, it's specified to be encoded
             with its UTF-16 surrogate pair. We distinguish and fetch the second part if necessary
-            now. For the actual conversion algorithm from the UTF-16 surrogate pair to the UTF-8
+            now. For the actual conversion algorithm from the UTF-16 surrogate pair to the UTF
             codepoint, https://en.wikipedia.org/wiki/UTF-16#U+D800_to_U+DFFF_(surrogates) is
             used as reference.
           */
@@ -172,17 +180,17 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Iterator for UnescapeString<'bytes,
               entirely of Unicode characters, with an unpaired surrogate being considered as unable
               to encode a Unicode character.
 
-              As Rust requires `char` be a UTF-8 codepoint, we require the strings be
-              "interoperable" per the RFC 8259 definition. While this may be slightly stricter than
-              the specification alone, it already has plenty of ambiguities due to how many slight
+              As Rust requires `char` be a UTF codepoint, we require the strings be "interoperable"
+              per the RFC 8259 definition. While this may be slightly stricter than the
+              specification alone, it already has plenty of ambiguities due to how many slight
               differences exist with JSON encoders/decoders.
 
               Additionally, we'll still decode JSON objects with invalidly specified UTF codepoints
               within their strings. We just won't support converting them to characters with this
               iterator. This iterator failing will not cause the deserializer as a whole to fail.
             */
-            self.remaining = self.remaining.checked_sub(4).ok_or(JsonError::InvalidValue)?;
-            let low = read_hex()?;
+            self.remaining = self.remaining.checked_sub(6).ok_or(JsonError::InvalidValue)?;
+            let low = read_hex(true)?;
 
             let Some(low) = low.checked_sub(0xdc00) else { Err(JsonError::InvalidValue)? };
             high + low + 0x10000
