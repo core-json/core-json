@@ -58,6 +58,6 @@ impl JsonDeserialize for String {
   fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
     value: Value<'bytes, 'parent, B, S>,
   ) -> Result<Self, JsonError<'bytes, B, S>> {
-    UnescapeString::from(value.to_str()?).collect()
+    value.to_str()?.collect()
   }
 }

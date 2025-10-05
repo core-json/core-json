@@ -79,7 +79,7 @@ pub(crate) fn read_string<'bytes, B: BytesLike<'bytes>, S: Stack>(
 }
 
 /// An interator which yields the characters for an escaped string serialized within JSON.
-pub struct UnescapeString<'bytes, B: BytesLike<'bytes>, S: Stack> {
+pub(crate) struct UnescapeString<'bytes, B: BytesLike<'bytes>, S: Stack> {
   string: B,
   remaining: usize,
   _stack: PhantomData<(&'bytes (), S)>,

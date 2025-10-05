@@ -32,7 +32,7 @@ mod tests {
         if is_object {
           let mut fields = value.fields().unwrap();
           while let Some(field) = fields.next() {
-            field.unwrap();
+            let _ = field.unwrap();
           }
         } else if is_array {
           let mut values = value.iterate().unwrap();

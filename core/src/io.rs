@@ -100,28 +100,22 @@ impl<'bytes> BytesLike<'bytes> for &'bytes [u8] {
 /// This avoids defining `BytesLike::len` which lets us relax the requirement `BytesLike` knows its
 /// length before it has reached its end.
 #[derive(Debug)]
-pub struct String<'bytes, B: BytesLike<'bytes>> {
+pub(crate) struct String<'bytes, B: BytesLike<'bytes>> {
   pub(crate) len: B::ExternallyTrackedLength,
   pub(crate) bytes: B,
   pub(crate) _encoding: PhantomData<&'bytes ()>,
 }
 
 impl<'bytes, B: BytesLike<'bytes>> String<'bytes, B> {
-  /// If this string is empty.
-  #[inline(always)]
-  pub fn is_empty(&self) -> bool {
-    self.bytes.len(self.len) == 0
-  }
-
   /// The length of this string.
   #[inline(always)]
-  pub fn len(&self) -> usize {
+  pub(crate) fn len(&self) -> usize {
     self.bytes.len(self.len)
   }
 
   /// Consume this into its underlying bytes.
   #[inline(always)]
-  pub fn consume(self) -> B {
+  pub(crate) fn consume(self) -> B {
     self.bytes
   }
 }

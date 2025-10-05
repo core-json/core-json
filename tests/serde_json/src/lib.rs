@@ -1,10 +1,5 @@
 use serde_json::Value;
 
-fn compare_strings(a: &str, b: &[u8]) -> bool {
-  let b = '"'.to_string() + str::from_utf8(b).unwrap() + "\"";
-  a == serde_json::from_str::<String>(&b).unwrap()
-}
-
 /*
   The following are _extremely slow_ tests for equivalence between these two values. We iterate
   over every value within the `serde_json::Value`, finding each individual unit value, and then
@@ -37,7 +32,7 @@ fn descend<
       let mut iterator = value.fields().unwrap();
       loop {
         let (found_field, value) = iterator.next().unwrap().unwrap();
-        if compare_strings(field, found_field.consume()) {
+        if field == &found_field.collect::<Result<String, _>>().unwrap() {
           descend(value, &path[1 ..], callback);
           return;
         }
@@ -102,33 +97,20 @@ fn check_number(encoding: &[u8], value: &Value, path: &[PathElement]) {
 }
 
 fn check_string(encoding: &[u8], value: &Value, path: &[PathElement]) {
-  // Check `core-json`'s behavior
+  let mut deserializer =
+    core_json::Deserializer::<_, core_json::ConstStack<128>>::new(encoding).unwrap();
   {
-    let mut deserializer =
-      core_json::Deserializer::<_, core_json::ConstStack<128>>::new(encoding).unwrap();
-    {
-      let string = deserializer.value().unwrap();
-      descend(string, path, |string: core_json::Value<_, _>| {
-        assert!(string.is_str().unwrap());
-        assert!(compare_strings(value.as_str().unwrap(), string.to_str().unwrap().consume()));
-      });
-    }
-    assert!(deserializer.value().is_err());
+    let string = deserializer.value().unwrap();
+    descend(string, path, |string: core_json::Value<_, _>| {
+      assert!(string.is_str().unwrap());
+      dbg!(value.to_string());
+      dbg!(value.as_str().unwrap());
+      assert!(
+        value.as_str().unwrap() == string.to_str().unwrap().collect::<Result<String, _>>().unwrap()
+      );
+    });
   }
-
-  // Check `core-json-traits`'s behavior, which should unescape the string
-  {
-    let mut deserializer =
-      core_json::Deserializer::<_, core_json::ConstStack<128>>::new(encoding).unwrap();
-    {
-      let string = deserializer.value().unwrap();
-      descend(string, path, |string: core_json::Value<_, _>| {
-        use core_json_traits::JsonDeserialize;
-        assert_eq!(value.as_str().unwrap(), String::deserialize(string).unwrap());
-      });
-    }
-    assert!(deserializer.value().is_err());
-  }
+  assert!(deserializer.value().is_err());
 }
 
 fn check_object(encoding: &[u8], value: &Value, path: &mut Vec<PathElement>) {
@@ -145,7 +127,7 @@ fn check_object(encoding: &[u8], value: &Value, path: &mut Vec<PathElement>) {
         let mut fields = object.fields().unwrap();
         let mut len = 0;
         while let Some(next) = fields.next() {
-          next.unwrap();
+          let _ = next.unwrap();
           len += 1;
         }
         assert_eq!(value.len(), len);

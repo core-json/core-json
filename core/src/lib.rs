@@ -15,7 +15,6 @@ pub(crate) use io::*;
 pub use io::BytesLike;
 pub use stack::*;
 use string::*;
-pub use string::UnescapeString;
 
 /// An error incurred when deserializing.
 #[derive(Debug)]
@@ -424,11 +423,15 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop
   }
 }
 
-#[rustfmt::skip]
-impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>
-  FieldIterator<'bytes, 'parent, B, S>
-{
+impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> FieldIterator<'bytes, 'parent, B, S> {
   /// The next entry (key, value) within the object.
+  ///
+  /// The key is presented as an iterator over the characters within the serialized string, with
+  /// the escape sequences handled. If the key specifies invalid UTF characters, the iterator will
+  /// yield an error when it attempts to parse them. While it may not be possible to parse a key
+  /// as UTF characters, decoding of this field's value (and the rest of the structure) is still
+  /// possible (even _after_ the iterator yields its error). For more information, please refer to
+  /// [`Value::to_str`].
   ///
   /// This is approximate to `Iterator::next` yet each item maintains a mutable reference to the
   /// iterator. Accordingly, we cannot use `Iterator::next` which requires items not borrow from
@@ -442,8 +445,15 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>
   #[allow(clippy::type_complexity, clippy::should_implement_trait)]
   pub fn next(
     &mut self,
-  ) -> Option<Result<(String<'bytes, B>, Value<'bytes, '_, B, S>), JsonError<'bytes, B, S>>>
-  {
+  ) -> Option<
+    Result<
+      (
+        impl use<'bytes, B, S> + Iterator<Item = Result<char, JsonError<'bytes, B, S>>>,
+        Value<'bytes, '_, B, S>,
+      ),
+      JsonError<'bytes, B, S>,
+    >,
+  > {
     if let Some(err) = self.deserializer.error {
       return Some(Err(err));
     }
@@ -460,7 +470,10 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>
       };
       match result {
         SingleStepObjectResult::Field { key } => {
-          break Some(Ok((key, Value { deserializer: Some(self.deserializer) })))
+          break Some(Ok((
+            UnescapeString::from(key),
+            Value { deserializer: Some(self.deserializer) },
+          )))
         }
         SingleStepObjectResult::Closed => {
           self.done = true;
@@ -622,16 +635,27 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
     )
   }
 
-  /// Get the current item as a 'string' (represented as a `B`).
+  /// Get the current item as a 'string'.
   ///
-  /// This will NOT unescape the string in any way, returning a view of the bytes underlying the
-  /// serialization. If you want the actual string represented, please pass this to
-  /// [`UnescapeString`] which will yield an iterator for the serialized `char`s.
+  /// As we cannot perform allocations, we do not yield a [`alloc::string::String`] but rather an
+  /// iterator for the contents of the serialized string (with its escape sequences handled). This
+  /// may be converted to an `String` with `.collect::<Result<String, _>>()?`.
+  ///
+  /// RFC 8259 allows strings to specify invalid UTF-8 codepoints. This library supports working
+  /// with such values, as required to be compliant with RFC 8259, but this function's return value
+  /// will error when attempting to return a non-UTF-8 value. Please keep this subtlety in mind.
   #[inline(always)]
-  pub fn to_str(mut self) -> Result<String<'bytes, B>, JsonError<'bytes, B, S>> {
+  pub fn to_str(
+    mut self,
+  ) -> Result<
+    impl use<'bytes, B, S> + Iterator<Item = Result<char, JsonError<'bytes, B, S>>>,
+    JsonError<'bytes, B, S>,
+  > {
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
     match single_step(&mut deserializer.bytes, &mut deserializer.stack)? {
-      SingleStepResult::Unknown(SingleStepUnknownResult::String(str)) => Ok(str),
+      SingleStepResult::Unknown(SingleStepUnknownResult::String(str)) => {
+        Ok(UnescapeString::from(str))
+      }
       _ => Err(JsonError::TypeError),
     }
   }

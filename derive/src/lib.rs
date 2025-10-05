@@ -197,17 +197,24 @@ pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
         serialization_field_name.expect("`field_name` but no `serialization_field_name`?");
       largest_key = largest_key.max(serialization_field_name.len());
 
+      let mut serialization_field_name_array = "&[".to_string();
       for char in serialization_field_name.chars() {
         if !(char.is_ascii_alphanumeric() || (char == '_')) {
           panic!(
             "character in name of field wasn't supported (`[A-Za-z0-9_]+` required): `{char}`"
           );
         }
+        serialization_field_name_array.push('\'');
+        serialization_field_name_array.push(char);
+        serialization_field_name_array.push('\'');
+        serialization_field_name_array.push(',');
       }
+      serialization_field_name_array.pop();
+      serialization_field_name_array.push(']');
 
       all_fields.push_str(&format!(
         r#"
-        b"{serialization_field_name}" => {{
+        {serialization_field_name_array} => {{
           result.{field_name} = core_json_traits::JsonDeserialize::deserialize(value)?
         }},
       "#
@@ -233,22 +240,31 @@ pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
         use core::default::Default;
 
         let mut result = Self::default();
+        if {largest_key} == 0 {{
+          return Ok(result);
+        }}
 
-        let mut key_bytes = [0; {largest_key}];
+        let mut key_chars = ['\0'; {largest_key}];
         let mut object = value.fields()?;
         while let Some(field) = object.next() {{
           let (mut key, value) = field?;
 
-          if key.len() > {largest_key} {{
-            continue;
-          }}
           let key = {{
-            let key_len = key.len();
-            key
-              .consume()
-              .read_into_slice(&mut key_bytes[.. key_len])
-              .map_err(core_json_traits::JsonError::BytesError)?;
-            &key_bytes[.. key_len]
+            let mut key_len = 0;
+            while let Some(key_char) = key.next() {{
+              key_chars[key_len] = key_char?;
+              key_len += 1;
+              if key_len == {largest_key} {{
+                break;
+              }}
+            }}
+            match key.next() {{
+              None => {{}},
+              // This key is larger than our largest key
+              Some(Ok(_)) => continue,
+              Some(Err(e)) => Err(e)?,
+            }}
+            &key_chars[.. key_len]
           }};
 
           match key {{
