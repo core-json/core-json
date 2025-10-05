@@ -199,17 +199,11 @@ pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
 
       let mut serialization_field_name_array = "&[".to_string();
       for char in serialization_field_name.chars() {
-        if !(char.is_ascii_alphanumeric() || (char == '_')) {
-          panic!(
-            "character in name of field wasn't supported (`[A-Za-z0-9_]+` required): `{char}`"
-          );
-        }
         serialization_field_name_array.push('\'');
-        serialization_field_name_array.push(char);
+        serialization_field_name_array.push_str(&char.escape_unicode().to_string());
         serialization_field_name_array.push('\'');
         serialization_field_name_array.push(',');
       }
-      serialization_field_name_array.pop();
       serialization_field_name_array.push(']');
 
       all_fields.push_str(&format!(
@@ -246,13 +240,25 @@ pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
 
         let mut key_chars = ['\0'; {largest_key}];
         let mut object = value.fields()?;
-        while let Some(field) = object.next() {{
+        'serialized_field: while let Some(field) = object.next() {{
           let (mut key, value) = field?;
 
           let key = {{
             let mut key_len = 0;
             while let Some(key_char) = key.next() {{
-              key_chars[key_len] = key_char?;
+              key_chars[key_len] = match key_char {{
+                Ok(key_char) => key_char,
+                /*
+                  This occurs when the key specifies an invalid UTF codepoint, which is technically
+                  allowed by RFC 8259. While it means we can't interpret the key, it also means
+                  this isn't a field we're looking for.
+
+                  Continue to the next serialized field accordingly.
+                */
+                Err(core_json_traits::JsonError::InvalidValue) => continue 'serialized_field,
+                // Propagate all other errors.
+                Err(e) => Err(e)?,
+              }};
               key_len += 1;
               if key_len == {largest_key} {{
                 break;
