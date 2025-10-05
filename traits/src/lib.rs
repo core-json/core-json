@@ -42,6 +42,7 @@ pub trait JsonObject: JsonDeserialize {
 }
 
 impl<T: JsonDeserialize> JsonDeserialize for Option<T> {
+  /// This will accept `null` as a representation of `None`.
   fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
     value: Value<'bytes, 'parent, B, S>,
   ) -> Result<Self, JsonError<'bytes, B, S>> {
