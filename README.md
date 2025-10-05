@@ -9,7 +9,7 @@ JSON.
 ### Goals
 
 - Offer a way to deserialize JSON without performing any allocations
-- Never rely on recursion to ensure the stack cannot overflow
+- Don't rely on recursion to ensure the stack cannot overflow
 - Never have a reachable panic
 - Never use `unsafe`
 - Use a minimal amount of memory

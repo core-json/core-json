@@ -37,6 +37,11 @@ pub trait Stack: Debug {
 
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
+/// An unbounded `Stack` premised on the allocating `Vec`.
+///
+/// This SHOULD NOT be used. This allows serializations to use an unbounded amount of memory to
+/// represent objects of arbitrary depth. It's here solely to offer 'complete' support for all
+/// possible serializations (compliant with RFC 8259).
 #[cfg(feature = "alloc")]
 impl Stack for Vec<State> {
   type Error = core::convert::Infallible;
