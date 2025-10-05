@@ -1,4 +1,4 @@
-use crate::{BytesLike, Stack, JsonError, Value, JsonDeserialize};
+use crate::{BytesLike, Stack, JsonError, Value, JsonDeserialize, JsonStructure};
 
 impl<T: 'static + Default + JsonDeserialize, const N: usize> JsonDeserialize for [T; N] {
   fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
@@ -20,6 +20,7 @@ impl<T: 'static + Default + JsonDeserialize, const N: usize> JsonDeserialize for
     Ok(res)
   }
 }
+impl<T: 'static + Default + JsonDeserialize, const N: usize> JsonStructure for [T; N] {}
 
 #[cfg(feature = "alloc")]
 use alloc::{vec, vec::Vec};
@@ -36,3 +37,5 @@ impl<T: 'static + JsonDeserialize> JsonDeserialize for Vec<T> {
     Ok(res)
   }
 }
+#[cfg(feature = "alloc")]
+impl<T: 'static + JsonDeserialize> JsonStructure for Vec<T> {}

@@ -81,9 +81,16 @@ fn test_derive() {
   "#;
 
   assert_eq!(
-    MyStruct::<WithoutT>::deserialize_object::<_, core_json_traits::ConstStack<128>>(
+    MyStruct::<WithoutT>::deserialize_structure::<_, core_json_traits::ConstStack<128>>(
       serialized.as_bytes(),
     ).unwrap(),
     res,
+  );
+
+  assert_eq!(
+    <[MyStruct::<WithoutT>; 1]>::deserialize_structure::<_, core_json_traits::ConstStack<128>>(
+      ("[".to_string() + serialized + "]").as_bytes(),
+    ).unwrap(),
+    [res],
   );
 }

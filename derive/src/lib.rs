@@ -283,7 +283,7 @@ pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
         Ok(result)
       }}
     }}
-    impl{generic_bounds} core_json_traits::JsonObject for {object_name}{generics}
+    impl{generic_bounds} core_json_traits::JsonStructure for {object_name}{generics}
       where Self: core::default::Default {{}}
     "#
   ))

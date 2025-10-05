@@ -22,15 +22,15 @@ pub trait JsonDeserialize: Sized {
   ) -> Result<Self, JsonError<'bytes, B, S>>;
 }
 
-/// An item which can deserialized from a JSON serialization.
-pub trait JsonObject: JsonDeserialize {
-  /// Deserialize this item from an JSON-serialized blob.
+/// A structure which can deserialized from a JSON serialization.
+pub trait JsonStructure: JsonDeserialize {
+  /// Deserialize this structure from an JSON-serialized blob.
   ///
-  /// This will deserialize the object present without limitation. If a bound is desired, bound the
-  /// length of input or deserialize into types which define bounds.
+  /// This will deserialize the structure present without limitation. If a bound is desired, bound
+  /// the length of input or deserialize into types which define bounds.
   ///
   /// This method SHOULD NOT be overriden.
-  fn deserialize_object<'bytes, B: BytesLike<'bytes>, S: Stack>(
+  fn deserialize_structure<'bytes, B: BytesLike<'bytes>, S: Stack>(
     json: B,
   ) -> Result<Self, JsonError<'bytes, B, S>> {
     let mut json = Deserializer::new(json)?;
