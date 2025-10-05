@@ -60,6 +60,7 @@ name = "core-json-serde_json-tests"
 version = "0.1.0"
 dependencies = [
  "core-json",
+ "core-json-traits",
  "rand_core",
  "serde_json",
 ]

@@ -10,6 +10,8 @@ pub use core_json::*;
 
 mod primitives;
 mod sequences;
+#[cfg(feature = "alloc")]
+mod string;
 
 /// An item which can be deserialized from a `Value`.
 ///

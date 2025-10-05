@@ -102,16 +102,33 @@ fn check_number(encoding: &[u8], value: &Value, path: &[PathElement]) {
 }
 
 fn check_string(encoding: &[u8], value: &Value, path: &[PathElement]) {
-  let mut deserializer =
-    core_json::Deserializer::<_, core_json::ConstStack<128>>::new(encoding).unwrap();
+  // Check `core-json`'s behavior
   {
-    let string = deserializer.value().unwrap();
-    descend(string, path, |string: core_json::Value<_, _>| {
-      assert!(string.is_str().unwrap());
-      assert!(compare_strings(value.as_str().unwrap(), string.to_str().unwrap().consume()));
-    });
+    let mut deserializer =
+      core_json::Deserializer::<_, core_json::ConstStack<128>>::new(encoding).unwrap();
+    {
+      let string = deserializer.value().unwrap();
+      descend(string, path, |string: core_json::Value<_, _>| {
+        assert!(string.is_str().unwrap());
+        assert!(compare_strings(value.as_str().unwrap(), string.to_str().unwrap().consume()));
+      });
+    }
+    assert!(deserializer.value().is_err());
   }
-  assert!(deserializer.value().is_err());
+
+  // Check `core-json-traits`'s behavior, which should unescape the string
+  {
+    let mut deserializer =
+      core_json::Deserializer::<_, core_json::ConstStack<128>>::new(encoding).unwrap();
+    {
+      let string = deserializer.value().unwrap();
+      descend(string, path, |string: core_json::Value<_, _>| {
+        use core_json_traits::JsonDeserialize;
+        assert_eq!(value.as_str().unwrap(), String::deserialize(string).unwrap());
+      });
+    }
+    assert!(deserializer.value().is_err());
+  }
 }
 
 fn check_object(encoding: &[u8], value: &Value, path: &mut Vec<PathElement>) {
@@ -207,7 +224,9 @@ mod tests {
         // Unicode
         res.push(loop {
           if let Some(char) = char::from_u32(OsRng.next_u64() as u32) {
-            if char.is_ascii() {
+            // Skip ASCII as those are intended to be included by the other branch
+            // Skip the byte-order mark as implementations are allowed to ignore/reject it
+            if char.is_ascii() || (char == '\u{feff}') {
               continue;
             }
             break char;
