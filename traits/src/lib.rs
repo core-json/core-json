@@ -10,8 +10,6 @@ pub use core_json::*;
 
 mod primitives;
 mod sequences;
-#[cfg(feature = "alloc")]
-mod string;
 
 /// An item which can be deserialized from a `Value`.
 ///
@@ -50,5 +48,16 @@ impl<T: JsonDeserialize> JsonDeserialize for Option<T> {
       return Ok(None);
     }
     T::deserialize(value).map(Some)
+  }
+}
+
+#[cfg(feature = "alloc")]
+use alloc::string::String;
+#[cfg(feature = "alloc")]
+impl JsonDeserialize for String {
+  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
+    value: Value<'bytes, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'bytes, B, S>> {
+    UnescapeString::from(value.to_str()?).collect()
   }
 }

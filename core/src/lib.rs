@@ -15,6 +15,7 @@ pub(crate) use io::*;
 pub use io::BytesLike;
 pub use stack::*;
 use string::*;
+pub use string::UnescapeString;
 
 /// An error incurred when deserializing.
 #[derive(Debug)]
@@ -623,8 +624,9 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
 
   /// Get the current item as a 'string' (represented as a `B`).
   ///
-  /// This will NOT de-escape the string in any way, returning a view of the bytes underlying the
-  /// serialization.
+  /// This will NOT unescape the string in any way, returning a view of the bytes underlying the
+  /// serialization. If you want the actual string represented, please pass this to
+  /// [`UnescapeString`] which will yield an iterator for the serialized `char`s.
   #[inline(always)]
   pub fn to_str(mut self) -> Result<String<'bytes, B>, JsonError<'bytes, B, S>> {
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;

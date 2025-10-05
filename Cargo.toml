@@ -19,6 +19,7 @@ overflow-checks = true
 [workspace.lints.clippy]
 unwrap_or_default = "allow"
 manual_is_multiple_of = "allow"
+blocks_in_conditions = "allow"
 incompatible_msrv = "allow" # Manually verified with a GitHub workflow
 borrow_as_ptr = "deny"
 cast_lossless = "deny"
