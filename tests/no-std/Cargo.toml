@@ -22,5 +22,7 @@ core-json = { path = "../../core" }
 core-json-traits = { path = "../../traits" }
 core-json-derive = { path = "../../derive" }
 
+core-json-embedded-io = { path = "../../embedded-io" }
+
 [features]
 alloc = ["core-json-traits/alloc"]

@@ -5,6 +5,8 @@ members = [
   "traits",
   "derive",
 
+  "embedded-io",
+
   "tests/no-std",
   "tests/serde_json",
   "tests/JSON_checker",

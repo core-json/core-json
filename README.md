@@ -10,11 +10,21 @@ JSON.
 
 - Offer a way to deserialize JSON without performing any allocations
 - Don't rely on recursion to ensure the stack cannot overflow
-- Never have a reachable panic
+- Don't have reachable panics
 - Never use `unsafe`
 - Use a minimal amount of memory
 - Require zero dependencies
-- Additionally offer deserializing into typed structures
+
+### Typed Structures Support
+
+Support for deserializing into typed structures is offered by
+[`core-json-traits`](https://docs.rs/core-json-traits).
+
+### `embedded-io` Support
+
+While `core-json` uses its own `BytesLike` trait to represent the
+serialization, [`embedded-io`](https://docs.rs/embedded-io) is supported via
+[`core-json-embedded-io`](https://docs.rs/core-json-embedded-io).
 
 ### Testing
 

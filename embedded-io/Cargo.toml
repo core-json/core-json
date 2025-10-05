@@ -1,0 +1,21 @@
+[package]
+name = "core-json-embedded-io"
+version = "0.2.0"
+description = "`embedded-io` support for `core-json`"
+license = "MIT"
+repository = "https://github.com/kayabaNerve/core-json/tree/main/embedded-io"
+authors = ["Luke Parker <lukeparker5132@gmail.com>"]
+keywords = ["core", "no-std", "json", "embedded-io"]
+edition = "2021"
+rust-version = "1.82"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[dependencies]
+core-json = { path = "../core", version = "0.2", default-features = false }
+embedded-io = { version = "0.7", default-features = false }
