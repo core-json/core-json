@@ -82,19 +82,13 @@ pub(crate) fn read_string<'bytes, B: BytesLike<'bytes>, S: Stack>(
 pub struct UnescapeString<'bytes, B: BytesLike<'bytes>, S: Stack> {
   string: B,
   remaining: usize,
-  first_iter: bool,
   _stack: PhantomData<(&'bytes (), S)>,
 }
 impl<'bytes, B: BytesLike<'bytes>, S: Stack> From<String<'bytes, B>>
   for UnescapeString<'bytes, B, S>
 {
   fn from(string: String<'bytes, B>) -> Self {
-    Self {
-      remaining: string.len(),
-      string: string.consume(),
-      first_iter: true,
-      _stack: PhantomData,
-    }
+    Self { remaining: string.len(), string: string.consume(), _stack: PhantomData }
   }
 }
 impl<'bytes, B: BytesLike<'bytes>, S: Stack> Iterator for UnescapeString<'bytes, B, S> {
@@ -200,20 +194,12 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Iterator for UnescapeString<'bytes,
           };
 
           // Yield the codepoint
-          let Some(char) = char::from_u32(codepoint) else { Err(JsonError::InvalidValue)? };
-          // https://datatracker.ietf.org/doc/html/rfc8259#section-8.1
-          if self.first_iter && (char == '\u{feff}') {
-            Err(JsonError::InvalidValue)?
-          }
-          Ok(char)
+          char::from_u32(codepoint).ok_or(JsonError::InvalidValue)
         }
         // `InternalError`: `\` without a recognized following character
         _ => Err(JsonError::InternalError),
       }
     })();
-
-    // Mark this is no longer the first iteration
-    self.first_iter = false;
 
     // If the result was an error, set `remaining = 0` so all future calls to `next` yield `None`
     if res.is_err() {
