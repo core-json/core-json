@@ -15,4 +15,4 @@ series of established regulations regarding contributed code, as follows:
    unreachable, not just unlikely.
 
 4) The priorities of the code are safety first and foremost, propriety second,
-   performance third, and clarity fourth.
+   and performance third.
