@@ -52,12 +52,19 @@ impl<T: JsonDeserialize> JsonDeserialize for Option<T> {
 }
 
 #[cfg(feature = "alloc")]
-use alloc::string::String;
-#[cfg(feature = "alloc")]
-impl JsonDeserialize for String {
+impl JsonDeserialize for alloc::string::String {
   fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
     value: Value<'bytes, 'parent, B, S>,
   ) -> Result<Self, JsonError<'bytes, B, S>> {
     value.to_str()?.collect()
+  }
+}
+
+#[cfg(feature = "alloc")]
+impl<T: JsonDeserialize> JsonDeserialize for alloc::boxed::Box<T> {
+  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
+    value: Value<'bytes, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'bytes, B, S>> {
+    T::deserialize(value).map(Into::into)
   }
 }
