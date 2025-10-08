@@ -90,6 +90,10 @@ pub(crate) fn as_number_str<'bytes, B: BytesLike<'bytes>, S: Stack>(
     Err(JsonError::TypeError)?;
   }
 
+  if first_char_in_int.is_none() {
+    Err(JsonError::TypeError)?;
+  }
+
   Ok((i, str))
 }
 
