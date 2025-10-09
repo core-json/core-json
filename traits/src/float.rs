@@ -77,9 +77,9 @@ impl Iterator for WholeFloatInterator {
     }
     self.i += 1;
 
-    // Safe as not `NaN`, not `inf`, and representable in `u8`
-    // Rust 1.90 ships `f64::trunc` on `std` but it isn't available on `core` :/
-    let char_offset = unsafe { (value % 10f64).to_int_unchecked::<u8>() };
+    // Safe as the value is not `NaN`, not `inf`, and is representable in `u8`
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let char_offset = (value % 10f64) as u8;
     // Safe to cast as this will be `'0' ..= '9'`
     Some((b'0' + char_offset) as char)
   }
@@ -92,8 +92,9 @@ impl Iterator for DecimalIteratorInner {
   type Item = char;
   fn next(&mut self) -> Option<Self::Item> {
     self.value = (self.value * 10f64) % 10f64;
-    // Safe as not `NaN`, not `inf`, and representable in `u8`
-    let char_offset = unsafe { self.value.to_int_unchecked::<u8>() };
+    // Safe as the value is not `NaN`, not `inf`, and is representable in `u8`
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let char_offset = self.value as u8;
     // Safe to cast as this will be `'0' ..= '9'`
     Some((b'0' + char_offset) as char)
   }

@@ -11,7 +11,7 @@ JSON.
 - Offer a way to deserialize JSON without performing any allocations
 - Don't rely on recursion to ensure the stack cannot overflow
 - Don't have reachable panics
-- Don't use `unsafe`
+- Never use `unsafe`
 - Use a minimal amount of memory
 - Require zero dependencies
 
