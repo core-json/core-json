@@ -779,7 +779,13 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
       dst += 1;
     }
     let str = core::str::from_utf8(&str[.. len]).map_err(|_| JsonError::InternalError)?;
-    <f64 as core::str::FromStr>::from_str(str).map_err(|_| JsonError::TypeError)
+    let result = <f64 as core::str::FromStr>::from_str(str).map_err(|_| JsonError::TypeError)?;
+    // Reject infinity as it's not a legitimate JSON number and signals this number is outside our
+    // supported range (which we're allowed to arbitrarily define)
+    if result.is_infinite() {
+      Err(JsonError::TypeError)?;
+    }
+    Ok(result)
   }
 
   /// Get the current item as a `bool`.
