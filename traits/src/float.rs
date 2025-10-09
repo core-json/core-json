@@ -22,8 +22,8 @@ impl TryFrom<f64> for JsonF64 {
   fn try_from(value: f64) -> Result<Self, Self::Error> {
     let class = value.classify();
     match class {
-      FpCategory::Nan | FpCategory::Infinite | FpCategory::Subnormal => Err(class)?,
-      FpCategory::Zero | FpCategory::Normal => {}
+      FpCategory::Nan | FpCategory::Infinite => Err(class)?,
+      FpCategory::Zero | FpCategory::Normal | FpCategory::Subnormal => {}
     }
     Ok(Self(value))
   }

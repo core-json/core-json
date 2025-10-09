@@ -715,8 +715,8 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
 
       We bind `minus`, `decimal-point`, `e`, `plus` to a maximum length of 1 as they definitively
       have a length of 1. We bind the integer part to a maximum length of `f64::MAX_10_EXP + 1`,
-      the maximum length of a normal integer. We bind the fractional part to `f64::DIGITS`, the
-      amount of significant digits Rust can definitely convert back/forth with a base-10
+      the maximum length of a (sub)normal integer. We bind the fractional part to `f64::DIGITS`,
+      the amount of significant digits Rust can definitely convert back/forth with a base-10
       serialization without loss of information. We bind the exponent to four digits as `f64` has
       a maximum exponent `1000 < e < 2000`.
     */
