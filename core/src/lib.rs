@@ -50,7 +50,7 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Copy for JsonError<'bytes, B, S> {}
 
 /// Interpret the immediate value within the bytes as a `bool`.
 #[inline(always)]
-pub fn as_bool<'bytes, B: BytesLike<'bytes>, S: Stack>(
+fn as_bool<'bytes, B: BytesLike<'bytes>, S: Stack>(
   bytes: &B,
 ) -> Result<bool, JsonError<'bytes, B, S>> {
   let first = bytes.peek(0).map_err(JsonError::BytesError)?;
@@ -75,7 +75,7 @@ pub fn as_bool<'bytes, B: BytesLike<'bytes>, S: Stack>(
 
 /// Check if the immediate value within the bytes is `null`.
 #[inline(always)]
-pub fn is_null<'bytes, B: BytesLike<'bytes>, S: Stack>(
+fn is_null<'bytes, B: BytesLike<'bytes>, S: Stack>(
   bytes: &B,
 ) -> Result<bool, JsonError<'bytes, B, S>> {
   let first = bytes.peek(0).map_err(JsonError::BytesError)?;
