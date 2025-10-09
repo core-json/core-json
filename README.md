@@ -8,12 +8,13 @@ JSON.
 
 ### Goals
 
-- Offer a way to deserialize JSON without performing any allocations
-- Don't rely on recursion to ensure the stack cannot overflow
+- Offer a way to (de)serialize JSON without performing any allocations
+- Don't rely on recursion during deserialization to ensure the stack cannot
+  overflow
 - Don't have reachable panics
 - Never use `unsafe`
 - Use a minimal amount of memory
-- Require zero dependencies
+- Require zero external dependencies
 
 ### Typed Structures/Serialization Support
 
@@ -23,9 +24,14 @@ structures, is offered by
 
 ### `embedded-io` Support
 
-While `core-json` uses its own `BytesLike` trait to represent the
-serialization, [`embedded-io`](https://docs.rs/embedded-io) is supported via
+While `core-json` uses its own `BytesLike` trait to represent serializations,
+[`embedded-io`](https://docs.rs/embedded-io) can be used via
 [`core-json-embedded-io`](https://docs.rs/core-json-embedded-io).
+
+### Contributing
+
+Please see
+[here](https://github.com/core-json/core-json/tree/main/Contributing.md).
 
 ### Testing
 
@@ -38,17 +44,26 @@ deserialize [JSON-Schema-Test-Suite](
 
 Additionally, we have a fuzz tester which generates random objects via
 [`serde_json`](https://docs.rs/serde_json) before ensuring `core-json` is able
-to deserialize an equivalent structure.
+to deserialize an equivalent structure, with `core-json-traits` able to
+serialize an equivalent structure as well.
 
 ### Implementation Details
 
-The deserializer is represented using a stack of the current state. The stack
-is parameterized by a constant for the maximum depth allowed for the
-deserialized objects, which will be used for a fixed allocation on the stack.
-The deserializer's state is approximately two bits per allowed nested object.
+The deserializer represents its state using a stack. The stack is parameterized
+by a constant for the maximum depth allowed for the deserialized objects, which
+will be used for a fixed allocation on the stack (approximately two bits per
+allowed nested object). Then, the deserializer iteratively advances past each
+token, pushing/popping structure changes as it goes along.
 
 Optionally, the caller may specify a stack which does dynamically allocate and
-supports an unbounded depth accordingly.
+supports an unbounded depth accordingly. This opens a Denial of Service vector
+where a malicious serialization may nest objects as necessary to exhaust
+memory.
+
+Serialization is implemented by returning `impl Iterator<Item = char>`. This is
+a standard API, being an iterator, but does not mandate allocations and should
+be trivial to convert to a `String` (`.collect::<String>()`) or pipe to a
+`std::io::Write`-like trait.
 
 ### Drawbacks
 
@@ -63,7 +78,7 @@ deserializing, which can make it a bit annoying to directly work with. The
 derivation of deserializing into typed objects however.
 
 Due to being no-`std`, we are unable to use `std::io::Read` and instead define
-our trait, `BytesLike`. While we implement this for `&[u8]`, it should be
+our own trait, `BytesLike`. While we implement this for `&[u8]`, it should be
 possible to implement for `bytes::Buf` (and similar constructions) without
 issue.
 
@@ -102,9 +117,9 @@ complexity) alternatives to `serde_json`.
 There's a bespoke self-describing binary format whose implementations have
 historically faced multiple security issues related to memory exhaustion. To
 solve this, `monero-epee` was published as a *non-allocating* deserializer. By
-always using a fixed amount of memory, it was impossible to increase the amount
-of memory consumed. This also inherently meant it worked on `core` and `core`
-alone.
+always using a fixed amount of memory, it was impossible to maliciously
+increase the amount of memory consumed. This also inherently meant it worked on
+`core` and `core` alone.
 
 Having already implemented such a deserializer once for a self-describing
 format, the same design and principles were applied to JSON, bringing us here.
