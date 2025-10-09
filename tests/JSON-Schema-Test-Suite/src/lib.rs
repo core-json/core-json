@@ -6,7 +6,9 @@ mod tests {
 
   #[test]
   fn pass() {
+    #[cfg(not(debug_assertions))]
     let mut serde = core::time::Duration::ZERO;
+    #[cfg(not(debug_assertions))]
     let mut core = core::time::Duration::ZERO;
 
     let mut i = 0;
@@ -31,6 +33,7 @@ mod tests {
         let path = file.path();
         let encoding = fs::read(path).unwrap();
 
+        #[cfg(not(debug_assertions))]
         for _ in 0 .. 5000 {
           let start = std::time::Instant::now();
           serde_json::from_slice::<serde_json::Value>(&encoding).unwrap();
@@ -43,6 +46,7 @@ mod tests {
           core_json_serde_json_tests::check_value(&encoding, &value);
         }
 
+        #[cfg(not(debug_assertions))]
         for _ in 0 .. 5000 {
           let start = std::time::Instant::now();
           let mut value =
@@ -59,7 +63,9 @@ mod tests {
     }
     assert_eq!(i, 80);
 
+    #[cfg(not(debug_assertions))]
     dbg!(serde.as_millis());
+    #[cfg(not(debug_assertions))]
     dbg!(core.as_millis());
   }
 }
