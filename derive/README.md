@@ -14,16 +14,6 @@ struct MyStruct {
 }
 ```
 
-We do support (de)serializing fields under a distinct name with the `rename` attribute.
-
-```rs
-#[derive(core_json_derive::JsonDeserialize, core_json_derive::JsonSerialize)]
-struct MyStruct {
-  #[rename("abcDef")]
-  abc_def: Vec<u8>,
-}
-```
-
 Then, deserialization may occur as follows.
 
 ```rs
@@ -36,9 +26,37 @@ determines how deep objects within the serialization are allowed to be. To
 support objects of unbounded depth, `Vec` may be used, but this is not
 recommended due to denial of service concerns.
 
-Serialization to a string may occur as follows.
+Serialization to a `String` may occur as follows.
 
 ```rs
 use core_json_traits::*;
 my_struct.serialize().collect::<String>()
 ```
+
+### `rename` Attribute
+
+We support (de)serializing fields with a key distinct from their names via the
+`rename` attribute.
+
+```rs
+#[derive(core_json_derive::JsonDeserialize, core_json_derive::JsonSerialize)]
+struct MyStruct {
+  #[rename("abcDef")]
+  abc_def: Vec<u8>,
+}
+```
+
+### `skip` Attribute
+
+We support omitting fields from (de)serialization with the `skip` attribute.
+
+```rs
+#[derive(core_json_derive::JsonDeserialize, core_json_derive::JsonSerialize)]
+struct MyStruct {
+  #[skip]
+  abc_def: Vec<u8>,
+}
+```
+
+The attribute will not be serialized and will not be read when deserializing,
+even if present within the serialization.

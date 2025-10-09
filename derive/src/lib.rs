@@ -142,39 +142,44 @@ fn parse_struct(object: TokenStream) -> Struct {
     // Access the field name
     let mut serialization_field_name = None;
     let mut field_name = None;
+    let mut skip = false;
     for item in &mut struct_body {
       // Hanlde the `rename` attribute
       if let TokenTree::Group(group) = &item {
         if group.delimiter() == Delimiter::Bracket {
           let mut iter = group.stream().into_iter();
-          if iter.next().and_then(|ident| match ident {
+          let ident = iter.next().and_then(|ident| match ident {
             TokenTree::Ident(ident) => Some(ident.to_string()),
             _ => None,
-          }) == Some("rename".to_string())
-          {
-            let TokenTree::Group(group) =
-              iter.next().expect("`rename` attribute without arguments")
-            else {
-              panic!("`rename` attribute not followed with `(...)`")
-            };
-            assert_eq!(
-              group.delimiter(),
-              Delimiter::Parenthesis,
-              "`rename` attribute with a non-parentheses group"
-            );
-            assert_eq!(
-              group.stream().into_iter().count(),
-              1,
-              "`rename` attribute with multiple tokens within parentheses"
-            );
-            let TokenTree::Literal(literal) = group.stream().into_iter().next().unwrap() else {
-              panic!("`rename` attribute with a non-literal argument")
-            };
-            let literal = literal.to_string();
-            assert_eq!(literal.chars().next().unwrap(), '"', "literal wasn't a string literal");
-            assert_eq!(literal.chars().last().unwrap(), '"', "literal wasn't a string literal");
-            serialization_field_name =
-              Some(literal.trim_start_matches('"').trim_end_matches('"').to_string());
+          });
+          match ident.as_deref() {
+            Some("skip") => skip = true,
+            Some("rename") => {
+              let TokenTree::Group(group) =
+                iter.next().expect("`rename` attribute without arguments")
+              else {
+                panic!("`rename` attribute not followed with `(...)`")
+              };
+              assert_eq!(
+                group.delimiter(),
+                Delimiter::Parenthesis,
+                "`rename` attribute with a non-parentheses group"
+              );
+              assert_eq!(
+                group.stream().into_iter().count(),
+                1,
+                "`rename` attribute with multiple tokens within parentheses"
+              );
+              let TokenTree::Literal(literal) = group.stream().into_iter().next().unwrap() else {
+                panic!("`rename` attribute with a non-literal argument")
+              };
+              let literal = literal.to_string();
+              assert_eq!(literal.chars().next().unwrap(), '"', "literal wasn't a string literal");
+              assert_eq!(literal.chars().last().unwrap(), '"', "literal wasn't a string literal");
+              serialization_field_name =
+                Some(literal.trim_start_matches('"').trim_end_matches('"').to_string());
+            }
+            _ => {}
           }
         }
       }
@@ -195,7 +200,9 @@ fn parse_struct(object: TokenStream) -> Struct {
     let serialization_field_name =
       serialization_field_name.expect("`field_name` but no `serialization_field_name`?");
 
-    fields.push((field_name, serialization_field_name));
+    if !skip {
+      fields.push((field_name, serialization_field_name));
+    }
 
     // Advance to the next field
     skip_comma_delimited(&mut struct_body);
@@ -211,10 +218,11 @@ fn parse_struct(object: TokenStream) -> Struct {
 /// field was omitted, please wrap it in `Option`.
 ///
 /// Fields may deserialized from a distinct key using the `rename` attribute, accepting a string
-/// literal for the key to deserialize from (`rename("key")`).
+/// literal for the key to deserialize from (`rename("key")`). Fields may be omitted from
+/// deserialization with the `skip` attribute.
 ///
 /// As a procedural macro, this will panic causing a compile-time error on any unexpected input.
-#[proc_macro_derive(JsonDeserialize, attributes(rename))]
+#[proc_macro_derive(JsonDeserialize, attributes(rename, skip))]
 pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
   let Struct { generic_bounds, generics, name, fields } = parse_struct(object);
 
@@ -315,10 +323,11 @@ pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
 /// Derive an implementation of the `JsonSerialize` trait.
 ///
 /// Fields may serialized with a distinct name using the `rename` attribute, accepting a string
-/// literal for the key to serialize as (`rename("key")`).
+/// literal for the key to serialize as (`rename("key")`). Fields may be omitted from serialization
+/// with the `skip` attribute.
 ///
 /// As a procedural macro, this will panic causing a compile-time error on any unexpected input.
-#[proc_macro_derive(JsonSerialize, attributes(rename))]
+#[proc_macro_derive(JsonSerialize, attributes(rename, skip))]
 pub fn derive_json_serialize(object: TokenStream) -> TokenStream {
   let Struct { generic_bounds, generics, name, fields } = parse_struct(object);
 

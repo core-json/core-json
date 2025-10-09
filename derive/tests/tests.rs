@@ -9,6 +9,8 @@ struct MyStruct<T: 'static + core::fmt::Debug + Default + JsonDeserialize + Json
   klmo: Vec<T>,
   missing: Option<u64>,
   float: JsonF64,
+  #[skip]
+  skipped: Option<u64>,
 }
 
 impl<T: 'static + core::fmt::Debug + Default + JsonDeserialize + JsonSerialize> PartialEq
@@ -67,6 +69,7 @@ fn test_derive() {
     ],
     missing: None,
     float: JsonF64::try_from(-123.456).unwrap(),
+    skipped: None,
   };
 
   let serialized = r#"
@@ -94,23 +97,35 @@ fn test_derive() {
         }
       ],
       "missing": null,
-      "float": -123.456
+      "float": -123.456,
+      "skipped": 10
     }
   "#;
 
-  assert_eq!(
-    MyStruct::<WithoutT>::deserialize_structure::<_, core_json_traits::ConstStack<128>>(
-      serialized.as_bytes(),
-    ).unwrap(),
-    res,
-  );
+  {
+    let deserialized =
+      MyStruct::<WithoutT>::deserialize_structure::<_, core_json_traits::ConstStack<128>>(
+        serialized.as_bytes(),
+      ).unwrap();
+    assert!(deserialized.skipped.is_none(), "`skipped` was `Some` despite `skip` attribute");
+    assert_eq!(deserialized, res);
+  }
 
-  assert_eq!(
-    MyStruct::<WithoutT>::deserialize_structure::<_, core_json_traits::ConstStack<128>>(
-      res.serialize().collect::<String>().as_bytes(),
-    ).unwrap(),
-    res,
-  );
+  {
+    let mut res = res.clone();
+    res.skipped = Some(10);
+    let serialization = res.serialize().collect::<String>();
+    assert!(
+      !serialization.contains("skipped"),
+      "`skipped` was serialized despite `skip` attribute",
+    );
+    assert_eq!(
+      MyStruct::<WithoutT>::deserialize_structure::<_, core_json_traits::ConstStack<128>>(
+        serialization.as_bytes(),
+      ).unwrap(),
+      res,
+    );
+  }
 
   assert_eq!(
     <[MyStruct::<WithoutT>; 1]>::deserialize_structure::<_, core_json_traits::ConstStack<128>>(
