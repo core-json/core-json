@@ -33,15 +33,15 @@ use core_json_traits::*;
 my_struct.serialize().collect::<String>()
 ```
 
-### `rename` Attribute
+### `key` Attribute
 
 We support (de)serializing fields with a key distinct from their names via the
-`rename` attribute.
+`key` attribute.
 
 ```rs
 #[derive(core_json_derive::JsonDeserialize, core_json_derive::JsonSerialize)]
 struct MyStruct {
-  #[rename("abcDef")]
+  #[key("abcDef")]
   abc_def: Vec<u8>,
 }
 ```

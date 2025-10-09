@@ -30,7 +30,7 @@ where
 
 #[derive(Clone, PartialEq, Debug, Default, JsonDeserialize, JsonSerialize)]
 struct WithoutT {
-  #[rename("xyza")]
+  #[key("xyza")]
   abc: i64,
   de: u8,
   ghij: Vec<u8>,
