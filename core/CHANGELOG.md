@@ -1,3 +1,7 @@
+# `core-json 0.2.2`
+
+- [Remove functions accidentally marked `pub`](https://github.com/core-json/core-json/commit/0cc8bd0a98405c0ac4dd9b7a64f76f83ed507cb2)
+
 # `core-json 0.2.1`
 
 - [Update repository URLs](https://github.com/core-json/core-json/commit/da434e18e426fb5bd3abf7dffa1462011770379e)
