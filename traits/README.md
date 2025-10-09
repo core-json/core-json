@@ -23,16 +23,11 @@ The `alloc` feature enables implementations for `Box`, `Vec`, and `String`.
 ### `ryu` Feature
 
 The optional `ryu` features enables serializing `f64`s via
-[`ryu`](https://docs.rs/ryu). When the `ryu` feature is not enabled, a bespoke
-(~130 lines of code) serializer will be used. Ideally, the `core`
-implementation would be used, yet:
+[`ryu`](https://docs.rs/ryu). When the `ryu` feature is not enabled, the
+implementation present in `core` is used, truncating to the first `f64::DIGITS`
+significant digits.
 
-1) `ryu` is faster than `core` (https://github.com/rust-lang/rust/issues/52811)
-
-2) The `core` implementation requires an implementor of `core::fmt::Write`,
-   which requires knowing a bound on the size ahead of time. No bounds are
-   stated, making this quite difficult.
-
-The `ryu` feature SHOULD be enabled for trees which already have `ryu` as a
+`ryu` is faster than `core` (https://github.com/rust-lang/rust/issues/52811)
+however, so it SHOULD be enabled for trees which already have `ryu` as a
 dependency. The `ryu` feature SHOULD NOT be enabled by libraries which depend
 on `core-json-traits` (solely the final consumer).

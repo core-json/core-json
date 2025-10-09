@@ -45,130 +45,153 @@ impl JsonDeserialize for JsonF64 {
 
 #[cfg(not(feature = "ryu"))]
 mod serialize {
+  use core::fmt::Write;
   use super::*;
 
-  struct WholeFloatInterator {
-    value: f64,
-    digits: usize,
+  // A non-allocating buffer for `core::fmt::Write` which truncates after `f64::DIGITS` digits
+  struct Buffer {
+    // sign, significant digits, decimal point
+    // For more information, please see `core_json::Value::as_f64`
+    bytes: [u8; 1 + (f64::DIGITS as usize) + 1],
     i: usize,
+    digits: usize,
+    before_decimal: bool,
+    omitted_decimal: bool,
+    before_exponent: bool,
+    negative_exponent: bool,
+    exponent: i16,
+    exponent_correction: i16,
   }
-  impl WholeFloatInterator {
-    fn new(value: f64) -> Self {
-      let digits = {
-        let mut digits = 0;
-        let mut value = value;
-        while value >= 1f64 {
-          digits += 1;
-          value /= 10f64;
+  impl Write for Buffer {
+    fn write_str(&mut self, value: &str) -> core::fmt::Result {
+      for char in value.chars() {
+        if self.before_exponent {
+          if char.is_ascii_digit() {
+            // Stop writing digits after we have all the significant digits which can be definitely
+            // handled without deviations when converting to/from a decimal string
+            if self.digits == (f64::DIGITS as usize) {
+              // If we're truncating prior to the decimal, mark a correction to the exponent
+              if self.before_decimal {
+                self.exponent_correction += 1;
+              }
+              continue;
+            }
+
+            // If this is a digit when we've omitted the decimal, correct the exponent
+            if self.omitted_decimal {
+              self.exponent_correction -= 1;
+            }
+
+            // Skip leading zeroes
+            if (self.digits == 0) && (char == '0') {
+              continue;
+            }
+
+            // Include the digit
+            self.digits += 1;
+          }
+
+          if char == '.' {
+            self.before_decimal = false;
+            // Don't include a decimal if we have yet to include the value itself
+            if self.digits == 0 {
+              self.omitted_decimal = true;
+              continue;
+            }
+            // Don't include a decimal point if we won't include the following digits
+            if self.digits == (f64::DIGITS as usize) {
+              continue;
+            }
+          }
         }
-        digits
-      };
 
-      WholeFloatInterator { value, digits, i: 0 }
-    }
-  }
-  impl Iterator for WholeFloatInterator {
-    type Item = char;
-    fn next(&mut self) -> Option<Self::Item> {
-      if self.i == self.digits {
-        None?;
+        if matches!(char, 'e' | 'E') {
+          self.before_exponent = false;
+          continue;
+        }
+
+        if self.before_exponent {
+          // Safe as `f64`'s display will only contain ASCII characters
+          self.bytes[self.i] = char as u8;
+          self.i += 1;
+        } else {
+          // Assumes exponents will be represented as `[ plus / minus ] *DIGIT` and fit within an
+          // `i16` (which they should as `f64::MAX_10_EXP = 308`)
+          if char == '+' {
+            continue;
+          }
+          if char == '-' {
+            self.negative_exponent = true;
+            continue;
+          }
+          self.exponent *= 10;
+          self.exponent += i16::from((char as u8) - b'0');
+        }
       }
-
-      let mut value = self.value;
-      // There will be at least one digit, as `self.i` starts at `0`
-      for _ in self.i .. (self.digits - 1) {
-        value /= 10f64;
-      }
-      self.i += 1;
-
-      // Safe as the value is not `NaN`, not `inf`, and is representable in `u8`
-      #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-      let char_offset = (value % 10f64) as u8;
-      // Safe to cast as this will be `'0' ..= '9'`
-      Some((b'0' + char_offset) as char)
-    }
-  }
-
-  struct DecimalIteratorInner {
-    value: f64,
-  }
-  impl Iterator for DecimalIteratorInner {
-    type Item = char;
-    fn next(&mut self) -> Option<Self::Item> {
-      self.value = (self.value * 10f64) % 10f64;
-      // Safe as the value is not `NaN`, not `inf`, and is representable in `u8`
-      #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-      let char_offset = self.value as u8;
-      // Safe to cast as this will be `'0' ..= '9'`
-      Some((b'0' + char_offset) as char)
-    }
-  }
-
-  struct DecimalIterator {
-    first: bool,
-    remaining: usize,
-    value: f64,
-  }
-  impl Iterator for DecimalIterator {
-    type Item = char;
-    fn next(&mut self) -> Option<Self::Item> {
-      // Stop if there are no remaining digits
-      if self.remaining == 0 {
-        None?;
-      }
-      // Stop early if the remaining digits are zeroes
-      if (DecimalIteratorInner { value: self.value }).take(self.remaining).all(|digit| digit == '0')
-      {
-        self.remaining = 0;
-        None?;
-      }
-
-      // If this is the first iteration, yield the decimal point
-      if self.first {
-        self.first = false;
-        return Some('.');
-      }
-
-      // Step forth the iterator
-      let mut iter = DecimalIteratorInner { value: self.value };
-      let result = iter.next();
-      self.remaining -= 1;
-      self.value = iter.value;
-      result
+      Ok(())
     }
   }
 
   impl JsonSerialize for JsonF64 {
+    /// This will only serialize the `f64::DIGITS` most significant digits.
     fn serialize(&self) -> impl Iterator<Item = char> {
-      let sign = self.0.is_sign_negative().then(|| core::iter::once('-')).into_iter().flatten();
+      let mut buffer = Buffer {
+        bytes: [b'0'; _],
+        i: 0,
+        digits: 0,
+        before_decimal: true,
+        omitted_decimal: false,
+        before_exponent: true,
+        negative_exponent: false,
+        exponent: 0,
+        exponent_correction: 0,
+      };
+      write!(&mut buffer, "{:?}", self.0).expect("infallible buffer raised an error");
 
-      let mut value = self.0.abs();
-      let mut value_has_integer_component = value >= 1f64;
-      let mut exponent = 0i32;
-
-      // If this is a non-zero float without an integer component, apply a negative exponent
-      if value != 0f64 {
-        while (!value_has_integer_component) && (exponent > f64::MIN_EXP) {
-          value *= 10f64;
-          value_has_integer_component = value >= 1f64;
-          exponent -= 1;
-        }
+      // If Rust gave us `1.e` (invalid), decrement the buffer index to remove the '.'
+      if buffer.i.checked_sub(1).map(|i| buffer.bytes[i]) == Some(b'.') {
+        buffer.i -= 1;
       }
-      let exponent = (exponent != 0)
-        .then(|| core::iter::once('e').chain(crate::primitives::i64_to_str(exponent)))
-        .into_iter()
-        .flatten();
 
-      sign
-        .chain((!value_has_integer_component).then(|| core::iter::once('0')).into_iter().flatten())
-        .chain(WholeFloatInterator::new(value))
-        .chain(DecimalIterator {
-          first: true,
-          remaining: f64::DIGITS as usize,
-          value: (value % 10f64),
-        })
-        .chain(exponent)
+      let exponent = {
+        let exponent = (if buffer.negative_exponent { -buffer.exponent } else { buffer.exponent }) +
+          buffer.exponent_correction;
+
+        ((buffer.i != 0) && (exponent != 0))
+          .then(|| core::iter::once('e').chain(crate::primitives::i64_to_str(exponent)))
+          .into_iter()
+          .flatten()
+      };
+      // Safe as all of the written-to values will be written-to with ASCII characters
+      buffer.bytes.into_iter().take(buffer.i.max(1)).map(|b| b as char).chain(exponent)
     }
+  }
+
+  #[test]
+  fn f64_serialize() {
+    use core::str::FromStr;
+    #[allow(clippy::float_cmp)]
+    let test = |value: f64, expected| {
+      assert_eq!(
+        f64::from_str(&JsonF64::try_from(value).unwrap().serialize().collect::<String>()).unwrap(),
+        f64::from_str(expected).unwrap()
+      );
+    };
+    test(0.0, "0");
+    test(0.1, "1e-1");
+    test(0.01, "1e-2");
+    test(0.001, "1e-3");
+    test(0.0012, "12e-4");
+    test(0.12345678910111213, "123456789101112e-15");
+    test(0.012345678910111213, "123456789101112e-16");
+    test(12345678910111213.0, "123456789101112e2");
+    test(12345678910111213.123, "123456789101112e2");
+    test(123456789.101112, "123456789.101112");
+    test(123456789.10111213, "123456789.101112");
+    test(-1.0, "-1");
+    test(f64::MIN, "-179769313486231e294");
+    test(f64::MAX, "179769313486231e294");
+    test(f64::EPSILON, "222044604925031e-30");
   }
 }
 

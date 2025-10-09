@@ -1,7 +1,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
