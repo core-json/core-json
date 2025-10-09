@@ -6,6 +6,9 @@ mod tests {
 
   #[test]
   fn pass() {
+    let mut serde = core::time::Duration::ZERO;
+    let mut core = core::time::Duration::ZERO;
+
     let mut i = 0;
     let mut folders = vec![std::path::PathBuf::from("./vectors")];
     while let Some(folder) = folders.pop() {
@@ -28,13 +31,35 @@ mod tests {
         let path = file.path();
         let encoding = fs::read(path).unwrap();
 
+        for _ in 0 .. 5000 {
+          let start = std::time::Instant::now();
+          serde_json::from_slice::<serde_json::Value>(&encoding).unwrap();
+          serde += start.elapsed();
+        }
+
         let value = serde_json::from_slice::<serde_json::Value>(&encoding).unwrap();
         // We only support structures, not scalar values, when deserializing at the root level
         if matches!(value, serde_json::Value::Object(_) | serde_json::Value::Array(_)) {
           core_json_serde_json_tests::check_value(&encoding, &value);
         }
+
+        for _ in 0 .. 5000 {
+          let start = std::time::Instant::now();
+          let mut value =
+            core_json::Deserializer::<_, core_json::ConstStack<32>>::new(encoding.as_slice())
+              .unwrap();
+          let value = value.value().unwrap();
+          let mut fields = value.iterate().unwrap();
+          while let Some(field) = fields.next() {
+            field.unwrap();
+          }
+          core += start.elapsed();
+        }
       }
     }
     assert_eq!(i, 80);
+
+    dbg!(serde.as_millis());
+    dbg!(core.as_millis());
   }
 }
