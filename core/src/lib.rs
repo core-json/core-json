@@ -53,17 +53,20 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Copy for JsonError<'bytes, B, S> {}
 pub fn as_bool<'bytes, B: BytesLike<'bytes>, S: Stack>(
   bytes: &B,
 ) -> Result<bool, JsonError<'bytes, B, S>> {
-  let first = bytes.peek(0).ok();
-  let second = bytes.peek(1).ok();
-  let third = bytes.peek(2).ok();
-  let fourth = bytes.peek(3).ok();
-  let fifth = bytes.peek(4).ok();
+  let first = bytes.peek(0).map_err(JsonError::BytesError)?;
+  // Return early if this definitely isn't a valid `bool`
+  if !matches!(first, b't' | b'f') {
+    Err(JsonError::TypeError)?;
+  }
+  let second = bytes.peek(1).map_err(JsonError::BytesError)?;
+  let third = bytes.peek(2).map_err(JsonError::BytesError)?;
+  let fourth = bytes.peek(3).map_err(JsonError::BytesError)?;
+  let fifth = bytes.peek(4).map_err(JsonError::BytesError)?;
 
-  let is_true = (first, second, third, fourth) == (Some(b't'), Some(b'r'), Some(b'u'), Some(b'e'));
-  let is_false = (first, second, third, fourth, fifth) ==
-    (Some(b'f'), Some(b'a'), Some(b'l'), Some(b's'), Some(b'e'));
+  let is_true = (first, second, third, fourth) == (b't', b'r', b'u', b'e');
+  let is_false = (first, second, third, fourth, fifth) == (b'f', b'a', b'l', b's', b'e');
 
-  if !(is_true | is_false) {
+  if !(is_true || is_false) {
     Err(JsonError::TypeError)?;
   }
 
@@ -75,12 +78,18 @@ pub fn as_bool<'bytes, B: BytesLike<'bytes>, S: Stack>(
 pub fn is_null<'bytes, B: BytesLike<'bytes>, S: Stack>(
   bytes: &B,
 ) -> Result<bool, JsonError<'bytes, B, S>> {
-  let first = bytes.peek(0).ok();
-  let second = bytes.peek(1).ok();
-  let third = bytes.peek(2).ok();
-  let fourth = bytes.peek(3).ok();
+  let first = bytes.peek(0).map_err(JsonError::BytesError)?;
+  if first != b'n' {
+    return Ok(false);
+  }
+  let second = bytes.peek(1).map_err(JsonError::BytesError)?;
+  let third = bytes.peek(2).map_err(JsonError::BytesError)?;
+  let fourth = bytes.peek(3).map_err(JsonError::BytesError)?;
 
-  Ok((first, second, third, fourth) == (Some(b'n'), Some(b'u'), Some(b'l'), Some(b'l')))
+  if (second, third, fourth) != (b'u', b'l', b'l') {
+    Err(JsonError::InvalidValue)?;
+  }
+  Ok(true)
 }
 
 /// Advance the bytes until there's a non-whitespace character.
