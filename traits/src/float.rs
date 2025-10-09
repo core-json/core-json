@@ -43,125 +43,153 @@ impl JsonDeserialize for JsonF64 {
   }
 }
 
-struct WholeFloatInterator {
-  value: f64,
-  digits: usize,
-  i: usize,
-}
-impl WholeFloatInterator {
-  fn new(value: f64) -> Self {
-    let digits = {
-      let mut digits = 0;
-      let mut value = value;
-      while value >= 1f64 {
-        digits += 1;
+#[cfg(not(feature = "ryu"))]
+mod serialize {
+  use super::*;
+
+  struct WholeFloatInterator {
+    value: f64,
+    digits: usize,
+    i: usize,
+  }
+  impl WholeFloatInterator {
+    fn new(value: f64) -> Self {
+      let digits = {
+        let mut digits = 0;
+        let mut value = value;
+        while value >= 1f64 {
+          digits += 1;
+          value /= 10f64;
+        }
+        digits
+      };
+
+      WholeFloatInterator { value, digits, i: 0 }
+    }
+  }
+  impl Iterator for WholeFloatInterator {
+    type Item = char;
+    fn next(&mut self) -> Option<Self::Item> {
+      if self.i == self.digits {
+        None?;
+      }
+
+      let mut value = self.value;
+      // There will be at least one digit, as `self.i` starts at `0`
+      for _ in self.i .. (self.digits - 1) {
         value /= 10f64;
       }
-      digits
-    };
+      self.i += 1;
 
-    WholeFloatInterator { value, digits, i: 0 }
+      // Safe as the value is not `NaN`, not `inf`, and is representable in `u8`
+      #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+      let char_offset = (value % 10f64) as u8;
+      // Safe to cast as this will be `'0' ..= '9'`
+      Some((b'0' + char_offset) as char)
+    }
   }
-}
-impl Iterator for WholeFloatInterator {
-  type Item = char;
-  fn next(&mut self) -> Option<Self::Item> {
-    if self.i == self.digits {
-      None?;
-    }
 
-    let mut value = self.value;
-    // There will be at least one digit, as `self.i` starts at `0`
-    for _ in self.i .. (self.digits - 1) {
-      value /= 10f64;
-    }
-    self.i += 1;
-
-    // Safe as the value is not `NaN`, not `inf`, and is representable in `u8`
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let char_offset = (value % 10f64) as u8;
-    // Safe to cast as this will be `'0' ..= '9'`
-    Some((b'0' + char_offset) as char)
+  struct DecimalIteratorInner {
+    value: f64,
   }
-}
-
-struct DecimalIteratorInner {
-  value: f64,
-}
-impl Iterator for DecimalIteratorInner {
-  type Item = char;
-  fn next(&mut self) -> Option<Self::Item> {
-    self.value = (self.value * 10f64) % 10f64;
-    // Safe as the value is not `NaN`, not `inf`, and is representable in `u8`
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let char_offset = self.value as u8;
-    // Safe to cast as this will be `'0' ..= '9'`
-    Some((b'0' + char_offset) as char)
+  impl Iterator for DecimalIteratorInner {
+    type Item = char;
+    fn next(&mut self) -> Option<Self::Item> {
+      self.value = (self.value * 10f64) % 10f64;
+      // Safe as the value is not `NaN`, not `inf`, and is representable in `u8`
+      #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+      let char_offset = self.value as u8;
+      // Safe to cast as this will be `'0' ..= '9'`
+      Some((b'0' + char_offset) as char)
+    }
   }
-}
 
-struct DecimalIterator {
-  first: bool,
-  remaining: usize,
-  value: f64,
-}
-impl Iterator for DecimalIterator {
-  type Item = char;
-  fn next(&mut self) -> Option<Self::Item> {
-    // Stop if there are no remaining digits
-    if self.remaining == 0 {
-      None?;
-    }
-    // Stop early if the remaining digits are zeroes
-    if (DecimalIteratorInner { value: self.value }).take(self.remaining).all(|digit| digit == '0') {
-      self.remaining = 0;
-      None?;
-    }
-
-    // If this is the first iteration, yield the decimal point
-    if self.first {
-      self.first = false;
-      return Some('.');
-    }
-
-    // Step forth the iterator
-    let mut iter = DecimalIteratorInner { value: self.value };
-    let result = iter.next();
-    self.remaining -= 1;
-    self.value = iter.value;
-    result
+  struct DecimalIterator {
+    first: bool,
+    remaining: usize,
+    value: f64,
   }
-}
-
-impl JsonSerialize for JsonF64 {
-  fn serialize(&self) -> impl Iterator<Item = char> {
-    let sign = self.0.is_sign_negative().then(|| core::iter::once('-')).into_iter().flatten();
-
-    let mut value = self.0.abs();
-    let mut value_has_integer_component = value >= 1f64;
-    let mut exponent = 0i32;
-
-    // If this is a non-zero float without an integer component, apply a negative exponent
-    if value != 0f64 {
-      while (!value_has_integer_component) && (exponent > f64::MIN_EXP) {
-        value *= 10f64;
-        value_has_integer_component = value >= 1f64;
-        exponent -= 1;
+  impl Iterator for DecimalIterator {
+    type Item = char;
+    fn next(&mut self) -> Option<Self::Item> {
+      // Stop if there are no remaining digits
+      if self.remaining == 0 {
+        None?;
       }
-    }
-    let exponent = (exponent != 0)
-      .then(|| core::iter::once('e').chain(crate::primitives::i64_to_str(exponent)))
-      .into_iter()
-      .flatten();
+      // Stop early if the remaining digits are zeroes
+      if (DecimalIteratorInner { value: self.value }).take(self.remaining).all(|digit| digit == '0')
+      {
+        self.remaining = 0;
+        None?;
+      }
 
-    sign
-      .chain((!value_has_integer_component).then(|| core::iter::once('0')).into_iter().flatten())
-      .chain(WholeFloatInterator::new(value))
-      .chain(DecimalIterator {
-        first: true,
-        remaining: f64::DIGITS as usize,
-        value: (value % 10f64),
-      })
-      .chain(exponent)
+      // If this is the first iteration, yield the decimal point
+      if self.first {
+        self.first = false;
+        return Some('.');
+      }
+
+      // Step forth the iterator
+      let mut iter = DecimalIteratorInner { value: self.value };
+      let result = iter.next();
+      self.remaining -= 1;
+      self.value = iter.value;
+      result
+    }
+  }
+
+  impl JsonSerialize for JsonF64 {
+    fn serialize(&self) -> impl Iterator<Item = char> {
+      let sign = self.0.is_sign_negative().then(|| core::iter::once('-')).into_iter().flatten();
+
+      let mut value = self.0.abs();
+      let mut value_has_integer_component = value >= 1f64;
+      let mut exponent = 0i32;
+
+      // If this is a non-zero float without an integer component, apply a negative exponent
+      if value != 0f64 {
+        while (!value_has_integer_component) && (exponent > f64::MIN_EXP) {
+          value *= 10f64;
+          value_has_integer_component = value >= 1f64;
+          exponent -= 1;
+        }
+      }
+      let exponent = (exponent != 0)
+        .then(|| core::iter::once('e').chain(crate::primitives::i64_to_str(exponent)))
+        .into_iter()
+        .flatten();
+
+      sign
+        .chain((!value_has_integer_component).then(|| core::iter::once('0')).into_iter().flatten())
+        .chain(WholeFloatInterator::new(value))
+        .chain(DecimalIterator {
+          first: true,
+          remaining: f64::DIGITS as usize,
+          value: (value % 10f64),
+        })
+        .chain(exponent)
+    }
+  }
+}
+
+#[cfg(feature = "ryu")]
+mod serialize {
+  use super::*;
+
+  impl JsonSerialize for JsonF64 {
+    fn serialize(&self) -> impl Iterator<Item = char> {
+      let mut buffer = ryu::Buffer::new();
+      // Safe as `JsonF64` ensures this isn't `NaN`, `inf`
+      let result = buffer.format_finite(self.0).as_bytes();
+      /*
+        `ryu` yields us a string slice when we need an owned value to iterate, unfortunately, so
+        we copy the yielded string (a reference to the Buffer) into our own buffer (of equivalent
+        size)
+      */
+      let mut owned = [0; core::mem::size_of::<ryu::Buffer>()];
+      owned[.. result.len()].copy_from_slice(result);
+      // Safe to cast to char as `ryu` yields human-readable ASCII characters
+      owned.into_iter().take(result.len()).map(|byte| byte as char)
+    }
   }
 }

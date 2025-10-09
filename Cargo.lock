@@ -79,6 +79,7 @@ name = "core-json-traits"
 version = "0.2.0"
 dependencies = [
  "core-json",
+ "ryu",
 ]
 
 [[package]]

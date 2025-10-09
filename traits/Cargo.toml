@@ -18,6 +18,7 @@ workspace = true
 
 [dependencies]
 core-json = { path = "../core", version = "0.2" }
+ryu = { version = "1", default-features = false, optional = true }
 
 [features]
 alloc = []
