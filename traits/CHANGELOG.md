@@ -1,3 +1,9 @@
+# `core-json-traits 0.2.1`
+
+- [Update repository URLs](https://github.com/core-json/core-json/commit/da434e18e426fb5bd3abf7dffa1462011770379e)
+- [Add `JsonSerialize`](https://github.com/core-json/core-json/commit/e726edc5a23c086be9f15ced9c76507e44708401)
+- [Add an optional feature for `ryu`](https://github.com/core-json/core-json/commit/7ddf5caf32b1cc599cfb51c3db77c0b454a0e43c)
+
 # `core-json-traits 0.2.0`
 
 - Updates to `core-json 0.2.0`

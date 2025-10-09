@@ -31,3 +31,8 @@ significant digits.
 however, so it SHOULD be enabled for trees which already have `ryu` as a
 dependency. The `ryu` feature SHOULD NOT be enabled by libraries which depend
 on `core-json-traits` (solely the final consumer).
+
+### Changelog
+
+A changelog may be found
+[here](https://github.com/core-json/core-json/tree/master/traits/CHANGELOG.md).

@@ -33,6 +33,11 @@ While `core-json` uses its own `BytesLike` trait to represent serializations,
 Please see
 [here](https://github.com/core-json/core-json/tree/main/Contributing.md).
 
+### Changelog
+
+A changelog may be found
+[here](https://github.com/core-json/core-json/tree/master/core/CHANGELOG.md).
+
 ### Testing
 
 This library passes [JSON_checker](https://www.json.org/JSON_checker/)'s test

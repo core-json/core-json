@@ -1,3 +1,8 @@
+# `core-json 0.2.1`
+
+- [Update repository URLs](https://github.com/core-json/core-json/commit/da434e18e426fb5bd3abf7dffa1462011770379e)
+- [Support working with objects with numbers of unbounded size](https://github.com/core-json/core-json/commit/e726edc5a23c086be9f15ced9c76507e44708401)
+
 # `core-json 0.2.0`
 
 - [Always yield an iterator for escaped strings](https://github.com/core-json/core-json/commit/2841de13ebdb890aae9e7f4b01ef2326a4022cfc)

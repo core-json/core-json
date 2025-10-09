@@ -60,3 +60,8 @@ struct MyStruct {
 
 The attribute will not be serialized and will not be read when deserializing,
 even if present within the serialization.
+
+### Changelog
+
+A changelog may be found
+[here](https://github.com/core-json/core-json/tree/master/derive/CHANGELOG.md).

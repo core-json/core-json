@@ -26,3 +26,10 @@ This means the library bounds `Clone + Read` and not `Read` for its
 `ClonableSeek` is provided as a wrapper to efficiently turn any `S: Seek` into
 `ClonableSeek<S>: Clone + Seek` (at the cost of one extra seek operation per
 each read).
+
+### Changelog
+
+A changelog may be found
+[here](
+  https://github.com/core-json/core-json/tree/master/embedded-io/CHANGELOG.md
+).
