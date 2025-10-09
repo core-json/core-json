@@ -11,13 +11,14 @@ JSON.
 - Offer a way to deserialize JSON without performing any allocations
 - Don't rely on recursion to ensure the stack cannot overflow
 - Don't have reachable panics
-- Never use `unsafe`
+- Don't use `unsafe`
 - Use a minimal amount of memory
 - Require zero dependencies
 
-### Typed Structures Support
+### Typed Structures/Serialization Support
 
-Support for deserializing into typed structures is offered by
+Support for deserializing into typed structures, and serialization of typed
+structures, is offered by
 [`core-json-traits`](https://docs.rs/core-json-traits).
 
 ### `embedded-io` Support

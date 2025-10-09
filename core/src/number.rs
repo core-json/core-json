@@ -1,28 +1,19 @@
 use crate::{BytesLike, Stack, JsonError};
 
-/*
-  https://datatracker.ietf.org/doc/html/rfc8259#section-6 lets us specify the range, precision of
-  numbers. We take advantage of this to only work with floats where the sum of the integer's
-  length, sum of the fraction's length, and exponent's length fits within the following bound.
-*/
-const MAX_FLOAT_LEN: usize = 128;
-
-/// Interpret the immediate value within the bytes as a number.
+/// Check if the immediate value within the bytes is a number.
 ///
-/// This returned the length of the number's serialization and an array containing the number's
-/// serialization.
-pub(crate) fn as_number_str<'bytes, B: BytesLike<'bytes>, S: Stack>(
+/// This returns the length of the number's serialization, if it's valid.
+pub(crate) fn is_number_str<'bytes, B: BytesLike<'bytes>, S: Stack>(
   bytes: &B,
-) -> Result<(usize, [u8; MAX_FLOAT_LEN]), JsonError<'bytes, B, S>> {
-  let mut str: [u8; MAX_FLOAT_LEN] = [0; MAX_FLOAT_LEN];
-
+) -> Result<usize, JsonError<'bytes, B, S>> {
   let mut i = 0;
   let mut frac = None;
   let mut has_exponent = false;
   let mut immediately_after_e = false;
+  let mut exponent_has_digit = false;
   let mut first_char_in_int = None;
   loop {
-    let char = bytes.peek(i).map_err(|_| JsonError::TypeError)?;
+    let char = bytes.peek(i).map_err(|e| JsonError::BytesError(e))?;
     // https://datatracker.ietf.org/doc/html/rfc8259#section-6
     match char {
       // `-` must be at the beginning of the number or immediately following the exponent
@@ -37,7 +28,12 @@ pub(crate) fn as_number_str<'bytes, B: BytesLike<'bytes>, S: Stack>(
           Err(JsonError::TypeError)?
         }
       }
-      b'0' => first_char_in_int = first_char_in_int.or(Some(char)),
+      b'0' => {
+        first_char_in_int = first_char_in_int.or(Some(char));
+        if has_exponent {
+          exponent_has_digit = true;
+        }
+      }
       // `0-9`
       b'1' ..= b'9' => {
         // If we are still within the integer part of the number...
@@ -47,6 +43,9 @@ pub(crate) fn as_number_str<'bytes, B: BytesLike<'bytes>, S: Stack>(
             Err(JsonError::TypeError)?
           }
           first_char_in_int = first_char_in_int.or(Some(char));
+        }
+        if has_exponent {
+          exponent_has_digit = true;
         }
       }
       b'.' => {
@@ -67,16 +66,18 @@ pub(crate) fn as_number_str<'bytes, B: BytesLike<'bytes>, S: Stack>(
         }
         has_exponent = true;
       }
-      _ => break,
+      // separator, array closure, object closure, whitespace
+      // https://datatracker.ietf.org/doc/html/rfc8259#section-2
+      b',' | b']' | b'}' | b'\x20' | b'\x09' | b'\x0A' | b'\x0D' => break,
+      _ => Err(if i == 0 { JsonError::TypeError } else { JsonError::InvalidValue })?,
     }
     immediately_after_e = matches!(char, b'e' | b'E');
-    if i == MAX_FLOAT_LEN {
-      Err(JsonError::TypeError)?;
-    }
-    str[i] = char;
     i += 1;
   }
 
+  if first_char_in_int.is_none() {
+    Err(JsonError::TypeError)?;
+  }
   // If there was a fractional part yet no exponent, check it had at least one digit
   if !has_exponent {
     if let Some(frac) = frac {
@@ -86,25 +87,9 @@ pub(crate) fn as_number_str<'bytes, B: BytesLike<'bytes>, S: Stack>(
     }
   }
   // If there was an exponent, check it had at least one digit
-  if has_exponent && (!str[i - 1].is_ascii_digit()) {
+  if has_exponent && (!exponent_has_digit) {
     Err(JsonError::TypeError)?;
   }
 
-  if first_char_in_int.is_none() {
-    Err(JsonError::TypeError)?;
-  }
-
-  Ok((i, str))
-}
-
-/// Interpret the immediate value within the bytes as a number.
-///
-/// Returns the length of the number's serialization and the number as a `f64`.
-pub(crate) fn as_number<'bytes, B: BytesLike<'bytes>, S: Stack>(
-  bytes: &B,
-) -> Result<(usize, f64), JsonError<'bytes, B, S>> {
-  let (i, str) = as_number_str(bytes)?;
-  let str = core::str::from_utf8(&str[.. i]).map_err(|_| JsonError::InternalError)?;
-  let res = <f64 as core::str::FromStr>::from_str(str).map_err(|_| JsonError::TypeError)?;
-  Ok((str.len(), res))
+  Ok(i)
 }

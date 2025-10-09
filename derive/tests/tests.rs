@@ -1,16 +1,32 @@
-use core_json_traits::JsonDeserialize;
-use core_json_derive::JsonDeserialize;
+use core_json_traits::{JsonF64, JsonDeserialize, JsonSerialize};
+use core_json_derive::{JsonDeserialize, JsonSerialize};
 
-#[derive(PartialEq, Debug, Default, JsonDeserialize)]
-struct MyStruct<T: 'static + core::fmt::Debug + Default + JsonDeserialize> {
+#[derive(Clone, Debug, Default, JsonDeserialize, JsonSerialize)]
+struct MyStruct<T: 'static + core::fmt::Debug + Default + JsonDeserialize + JsonSerialize> {
   pub abc: u64,
   de: u8,
   pub(crate) ghij: Vec<u8>,
   klmo: Vec<T>,
   missing: Option<u64>,
+  float: JsonF64,
 }
 
-#[derive(PartialEq, Debug, Default, JsonDeserialize)]
+impl<T: 'static + core::fmt::Debug + Default + JsonDeserialize + JsonSerialize> PartialEq
+  for MyStruct<T>
+where
+  T: PartialEq,
+{
+  fn eq(&self, other: &Self) -> bool {
+    (self.abc == other.abc) &&
+      (self.de == other.de) &&
+      (self.ghij == other.ghij) &&
+      (self.klmo == other.klmo) &&
+      (self.missing == other.missing) &&
+      (f64::from(self.float) == f64::from(other.float))
+  }
+}
+
+#[derive(Clone, PartialEq, Debug, Default, JsonDeserialize, JsonSerialize)]
 struct WithoutT {
   #[rename("xyza")]
   abc: i64,
@@ -50,6 +66,7 @@ fn test_derive() {
       }
     ],
     missing: None,
+    float: JsonF64::try_from(-123.456).unwrap(),
   };
 
   let serialized = r#"
@@ -76,7 +93,8 @@ fn test_derive() {
           ]
         }
       ],
-      "missing": null
+      "missing": null,
+      "float": -123.456
     }
   "#;
 
@@ -88,8 +106,22 @@ fn test_derive() {
   );
 
   assert_eq!(
+    MyStruct::<WithoutT>::deserialize_structure::<_, core_json_traits::ConstStack<128>>(
+      res.serialize().collect::<String>().as_bytes(),
+    ).unwrap(),
+    res,
+  );
+
+  assert_eq!(
     <[MyStruct::<WithoutT>; 1]>::deserialize_structure::<_, core_json_traits::ConstStack<128>>(
       ("[".to_string() + serialized + "]").as_bytes(),
+    ).unwrap(),
+    core::slice::from_ref(&res),
+  );
+
+  assert_eq!(
+    <[MyStruct::<WithoutT>; 1]>::deserialize_structure::<_, core_json_traits::ConstStack<128>>(
+      [res.clone()].serialize().collect::<String>().as_bytes(),
     ).unwrap(),
     [res],
   );

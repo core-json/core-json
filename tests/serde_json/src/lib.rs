@@ -75,6 +75,12 @@ fn check_bool(encoding: &[u8], value: &Value, path: &[PathElement]) {
   assert!(deserializer.value().is_err());
 }
 
+fn check_float(number: f64, expected: f64) {
+  // 0.1% of the smaller number
+  let allowed_deviation = number.min(expected).abs() / 1000.0;
+  assert!((number - expected).abs() <= allowed_deviation);
+}
+
 fn check_number(encoding: &[u8], value: &Value, path: &[PathElement]) {
   let mut deserializer =
     core_json::Deserializer::<_, core_json::ConstStack<128>>::new(encoding).unwrap();
@@ -87,9 +93,7 @@ fn check_number(encoding: &[u8], value: &Value, path: &[PathElement]) {
       } else if expected.is_f64() {
         let number = number.as_f64().unwrap();
         let expected = expected.as_f64().unwrap();
-        // 0.1% of the smaller number
-        let allowed_deviation = number.min(expected).abs() / 1000.0;
-        assert!((number - expected).abs() <= allowed_deviation);
+        check_float(number, expected)
       }
     });
   }
@@ -190,6 +194,7 @@ pub fn check_value(encoding: &[u8], value: &Value) {
 
 #[cfg(test)]
 mod tests {
+  use std::str::FromStr;
   use rand_core::{RngCore, OsRng};
   use super::*;
 
@@ -251,6 +256,67 @@ mod tests {
     }
   }
 
+  fn serialize_value(value: &Value) -> String {
+    use core_json_traits::{JsonF64, JsonSerialize};
+    match value {
+      Value::Null => "null".to_string(),
+      Value::Bool(bool) => bool.serialize().collect::<String>(),
+      Value::Number(number) => {
+        JsonF64::try_from(number.as_f64().unwrap()).unwrap().serialize().collect::<String>()
+      }
+      Value::String(str) => str.serialize().collect::<String>(),
+      Value::Array(array) => {
+        let mut res = "[".to_string();
+        for value in array {
+          res += &serialize_value(value);
+          res += ",";
+        }
+        if !array.is_empty() {
+          res.pop();
+        }
+        res += "]";
+        res
+      }
+      Value::Object(object) => {
+        let mut res = "{".to_string();
+        for (key, value) in object {
+          res += &key.serialize().collect::<String>();
+          res += ":";
+          res += &serialize_value(value);
+          res += ",";
+        }
+        if !object.is_empty() {
+          res.pop();
+        }
+        res += "}";
+        res
+      }
+    }
+  }
+
+  fn check_values_equivalent(a: &Value, b: &Value) {
+    match a {
+      Value::Null | Value::Bool(_) | Value::String(_) => assert_eq!(a, b),
+      Value::Number(number) => {
+        check_float(number.as_f64().unwrap(), b.as_number().unwrap().as_f64().unwrap());
+      }
+      Value::Array(array) => {
+        let b = b.as_array().unwrap();
+        assert_eq!(array.len(), b.len());
+        for (a, b) in array.iter().zip(b) {
+          check_values_equivalent(a, b);
+        }
+      }
+      Value::Object(object) => {
+        let b = b.as_object().unwrap();
+        assert_eq!(object.len(), b.len());
+        for (key, value) in object {
+          check_values_equivalent(value, &b[key]);
+        }
+      }
+    }
+  }
+
   #[test]
   fn fuzz() {
     for i in 0 .. 100 {
@@ -265,6 +331,10 @@ mod tests {
       let bytes = bytes.as_slice();
 
       check_value(bytes, &value);
+      check_values_equivalent(
+        &value,
+        &serde_json::Value::from_str(&serialize_value(&value)).unwrap(),
+      );
     }
   }
 }

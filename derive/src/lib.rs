@@ -7,8 +7,10 @@ use core::{borrow::Borrow, str::FromStr, iter::Peekable};
 
 extern crate alloc;
 use alloc::{
+  vec,
+  vec::Vec,
   string::{String, ToString},
-  vec, format,
+  format,
 };
 
 extern crate proc_macro;
@@ -60,168 +62,188 @@ fn skip_comma_delimited(iter: &mut Peekable<impl Iterator<Item: Borrow<TokenTree
   }
 }
 
+struct Struct {
+  generic_bounds: String,
+  generics: String,
+  name: String,
+  fields: Vec<(String, String)>,
+}
+
+// This is somewhat comparable to `syn::Generics`, especially its `split_for_impl` method.
+fn parse_struct(object: TokenStream) -> Struct {
+  let mut object = object.into_iter().peekable();
+
+  loop {
+    match object.peek() {
+      Some(TokenTree::Punct(punct)) if punct.as_char() == '#' => {
+        let _ = object.next().expect("peeked but not present");
+        let TokenTree::Group(_) = object.next().expect("`#` but no `[ ... ]`") else {
+          panic!("`#` not followed by a `TokenTree::Group` for its `[ ... ]`")
+        };
+      }
+      _ => break,
+    }
+  }
+
+  match object.next() {
+    Some(TokenTree::Ident(ident)) if ident.to_string() == "struct" => {}
+    _ => panic!("`JsonDeserialize` wasn't applied to a `struct`"),
+  }
+  let name = match object.next() {
+    Some(TokenTree::Ident(ident)) => ident.to_string(),
+    _ => panic!("`JsonDeserialize` wasn't applied to a `struct` with a name"),
+  };
+
+  let generic_bounds_tree = take_angle_expression(&mut object);
+
+  let mut generics_tree = vec![];
+  {
+    let mut iter = generic_bounds_tree.clone().into_iter().peekable();
+    while let Some(component) = iter.next() {
+      // Take until the next colon, used to mark trait bounds
+      if let TokenTree::Punct(punct) = &component {
+        if punct.as_char() == ':' {
+          // Skip the actual bounds
+          skip_comma_delimited(&mut iter);
+          // Add our own comma delimiter and move to the next item
+          generics_tree.push(TokenTree::Punct(Punct::new(',', Spacing::Alone)));
+          continue;
+        }
+      }
+      // Push this component as it isn't part of the bounds
+      generics_tree.push(component);
+    }
+  }
+  // Ensure this is terminated, which it won't be if the last item had bounds yet didn't have a
+  // trailing comma
+  if let Some(last) = generics_tree.last() {
+    match last {
+      TokenTree::Punct(punct) if punct.as_char() == '>' => {}
+      _ => generics_tree.push(TokenTree::Punct(Punct::new('>', Spacing::Alone))),
+    }
+  }
+
+  let generic_bounds = generic_bounds_tree.to_string();
+  let generics = TokenStream::from_iter(generics_tree).to_string();
+
+  // This presumably means we don't support `struct`s defined with `where` bounds
+  let Some(TokenTree::Group(struct_body)) = object.next() else {
+    panic!("`struct`'s name was not followed by its body");
+  };
+  if struct_body.delimiter() != Delimiter::Brace {
+    panic!("`JsonDeserialize` derivation applied to `struct` with anonymous fields");
+  }
+
+  let mut fields = vec![];
+
+  let mut struct_body = struct_body.stream().into_iter().peekable();
+  // Read each field within this `struct`'s body
+  while struct_body.peek().is_some() {
+    // Access the field name
+    let mut serialization_field_name = None;
+    let mut field_name = None;
+    for item in &mut struct_body {
+      // Hanlde the `rename` attribute
+      if let TokenTree::Group(group) = &item {
+        if group.delimiter() == Delimiter::Bracket {
+          let mut iter = group.stream().into_iter();
+          if iter.next().and_then(|ident| match ident {
+            TokenTree::Ident(ident) => Some(ident.to_string()),
+            _ => None,
+          }) == Some("rename".to_string())
+          {
+            let TokenTree::Group(group) =
+              iter.next().expect("`rename` attribute without arguments")
+            else {
+              panic!("`rename` attribute not followed with `(...)`")
+            };
+            assert_eq!(
+              group.delimiter(),
+              Delimiter::Parenthesis,
+              "`rename` attribute with a non-parentheses group"
+            );
+            assert_eq!(
+              group.stream().into_iter().count(),
+              1,
+              "`rename` attribute with multiple tokens within parentheses"
+            );
+            let TokenTree::Literal(literal) = group.stream().into_iter().next().unwrap() else {
+              panic!("`rename` attribute with a non-literal argument")
+            };
+            let literal = literal.to_string();
+            assert_eq!(literal.chars().next().unwrap(), '"', "literal wasn't a string literal");
+            assert_eq!(literal.chars().last().unwrap(), '"', "literal wasn't a string literal");
+            serialization_field_name =
+              Some(literal.trim_start_matches('"').trim_end_matches('"').to_string());
+          }
+        }
+      }
+
+      if let TokenTree::Ident(ident) = item {
+        let ident = ident.to_string();
+        // Skip the access modifier
+        if ident == "pub" {
+          continue;
+        }
+        field_name = Some(ident);
+        // Use the field's actual name within the serialization, if not renamed
+        serialization_field_name = serialization_field_name.or(field_name.clone());
+        break;
+      }
+    }
+    let field_name = field_name.expect("couldn't find the name of the field within the `struct`");
+    let serialization_field_name =
+      serialization_field_name.expect("`field_name` but no `serialization_field_name`?");
+
+    fields.push((field_name, serialization_field_name));
+
+    // Advance to the next field
+    skip_comma_delimited(&mut struct_body);
+  }
+
+  Struct { generic_bounds, generics, name, fields }
+}
+
 /// Derive an implementation of the `JsonDeserialize` trait.
 ///
 /// This _requires_ the `struct` derived for implement `Default`. Fields which aren't present in
 /// the serialization will be left to their `Default` initialization. If you wish to detect if a
 /// field was omitted, please wrap it in `Option`.
 ///
+/// Fields may deserialized from a distinct key using the `rename` attribute, accepting a string
+/// literal for the key to deserialize from (`rename("key")`).
+///
 /// As a procedural macro, this will panic causing a compile-time error on any unexpected input.
 #[proc_macro_derive(JsonDeserialize, attributes(rename))]
 pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
-  let generic_bounds;
-  let generics;
-  let object_name;
+  let Struct { generic_bounds, generics, name, fields } = parse_struct(object);
+
   let mut largest_key = 0;
-  let mut all_fields = String::new();
-  {
-    let mut object = object.clone().into_iter().peekable();
+  let mut fields_deserialization = String::new();
+  for (field_name, serialization_field_name) in &fields {
+    largest_key = largest_key.max(serialization_field_name.len());
 
-    loop {
-      match object.peek() {
-        Some(TokenTree::Punct(punct)) if punct.as_char() == '#' => {
-          let _ = object.next().expect("peeked but not present");
-          let TokenTree::Group(_) = object.next().expect("`#` but no `[ ... ]`") else {
-            panic!("`#` not followed by a `TokenTree::Group` for its `[ ... ]`")
-          };
-        }
-        _ => break,
-      }
+    let mut serialization_field_name_array = "&[".to_string();
+    for char in serialization_field_name.chars() {
+      serialization_field_name_array.push('\'');
+      serialization_field_name_array.push_str(&char.escape_unicode().to_string());
+      serialization_field_name_array.push('\'');
+      serialization_field_name_array.push(',');
     }
+    serialization_field_name_array.push(']');
 
-    match object.next() {
-      Some(TokenTree::Ident(ident)) if ident.to_string() == "struct" => {}
-      _ => panic!("`JsonDeserialize` wasn't applied to a `struct`"),
-    }
-    object_name = match object.next() {
-      Some(TokenTree::Ident(ident)) => ident.to_string(),
-      _ => panic!("`JsonDeserialize` wasn't applied to a `struct` with a name"),
-    };
-
-    let generic_bounds_tree = take_angle_expression(&mut object);
-
-    let mut generics_tree = vec![];
-    {
-      let mut iter = generic_bounds_tree.clone().into_iter().peekable();
-      while let Some(component) = iter.next() {
-        // Take until the next colon, used to mark trait bounds
-        if let TokenTree::Punct(punct) = &component {
-          if punct.as_char() == ':' {
-            // Skip the actual bounds
-            skip_comma_delimited(&mut iter);
-            // Add our own comma delimiter and move to the next item
-            generics_tree.push(TokenTree::Punct(Punct::new(',', Spacing::Alone)));
-            continue;
-          }
-        }
-        // Push this component as it isn't part of the bounds
-        generics_tree.push(component);
-      }
-    }
-    // Ensure this is terminated, which it won't be if the last item had bounds yet didn't have a
-    // trailing comma
-    if let Some(last) = generics_tree.last() {
-      match last {
-        TokenTree::Punct(punct) if punct.as_char() == '>' => {}
-        _ => generics_tree.push(TokenTree::Punct(Punct::new('>', Spacing::Alone))),
-      }
-    }
-
-    generic_bounds = generic_bounds_tree.to_string();
-    generics = TokenStream::from_iter(generics_tree).to_string();
-
-    // This presumably means we don't support `struct`'s defined with `where` bounds
-    let Some(TokenTree::Group(struct_body)) = object.next() else {
-      panic!("`struct`'s name was not followed by its body");
-    };
-    if struct_body.delimiter() != Delimiter::Brace {
-      panic!("`JsonDeserialize` derivation applied to `struct` with anonymous fields");
-    }
-    let mut struct_body = struct_body.stream().into_iter().peekable();
-    // Read each field within this `struct`'s body
-    while struct_body.peek().is_some() {
-      // Access the field name
-      let mut serialization_field_name = None;
-      let mut field_name = None;
-      for item in &mut struct_body {
-        // Hanlde the `rename` attribute
-        if let TokenTree::Group(group) = &item {
-          if group.delimiter() == Delimiter::Bracket {
-            let mut iter = group.stream().into_iter();
-            if iter.next().and_then(|ident| match ident {
-              TokenTree::Ident(ident) => Some(ident.to_string()),
-              _ => None,
-            }) == Some("rename".to_string())
-            {
-              let TokenTree::Group(group) =
-                iter.next().expect("`rename` attribute without arguments")
-              else {
-                panic!("`rename` attribute not followed with `(...)`")
-              };
-              assert_eq!(
-                group.delimiter(),
-                Delimiter::Parenthesis,
-                "`rename` attribute with a non-parentheses group"
-              );
-              assert_eq!(
-                group.stream().into_iter().count(),
-                1,
-                "`rename` attribute with multiple tokens within parentheses"
-              );
-              let TokenTree::Literal(literal) = group.stream().into_iter().next().unwrap() else {
-                panic!("`rename` attribute with a non-literal argument")
-              };
-              let literal = literal.to_string();
-              assert_eq!(literal.chars().next().unwrap(), '"', "literal wasn't a string literal");
-              assert_eq!(literal.chars().last().unwrap(), '"', "literal wasn't a string literal");
-              serialization_field_name =
-                Some(literal.trim_start_matches('"').trim_end_matches('"').to_string());
-            }
-          }
-        }
-
-        if let TokenTree::Ident(ident) = item {
-          let ident = ident.to_string();
-          // Skip the access modifier
-          if ident == "pub" {
-            continue;
-          }
-          field_name = Some(ident);
-          // Use the field's actual name within the serialization, if not renamed
-          serialization_field_name = serialization_field_name.or(field_name.clone());
-          break;
-        }
-      }
-      let field_name = field_name.expect("couldn't find the name of the field within the `struct`");
-      let serialization_field_name =
-        serialization_field_name.expect("`field_name` but no `serialization_field_name`?");
-      largest_key = largest_key.max(serialization_field_name.len());
-
-      let mut serialization_field_name_array = "&[".to_string();
-      for char in serialization_field_name.chars() {
-        serialization_field_name_array.push('\'');
-        serialization_field_name_array.push_str(&char.escape_unicode().to_string());
-        serialization_field_name_array.push('\'');
-        serialization_field_name_array.push(',');
-      }
-      serialization_field_name_array.push(']');
-
-      all_fields.push_str(&format!(
-        r#"
-        {serialization_field_name_array} => {{
-          result.{field_name} = core_json_traits::JsonDeserialize::deserialize(value)?
-        }},
+    fields_deserialization.push_str(&format!(
+      r#"
+      {serialization_field_name_array} => {{
+        result.{field_name} = core_json_traits::JsonDeserialize::deserialize(value)?
+      }},
       "#
-      ));
-
-      // Advance to the next field
-      skip_comma_delimited(&mut struct_body);
-    }
+    ));
   }
 
   TokenStream::from_str(&format!(
     r#"
-    impl{generic_bounds} core_json_traits::JsonDeserialize for {object_name}{generics}
+    impl{generic_bounds} core_json_traits::JsonDeserialize for {name}{generics}
       where Self: core::default::Default {{
       fn deserialize<
         'bytes,
@@ -274,7 +296,7 @@ pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
           }};
 
           match key {{
-            {all_fields}
+            {fields_deserialization}
             // Skip unknown fields
             _ => {{}}
           }}
@@ -283,9 +305,47 @@ pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
         Ok(result)
       }}
     }}
-    impl{generic_bounds} core_json_traits::JsonStructure for {object_name}{generics}
+    impl{generic_bounds} core_json_traits::JsonStructure for {name}{generics}
       where Self: core::default::Default {{}}
     "#
   ))
   .expect("typo in implementation of `JsonDeserialize`")
+}
+
+/// Derive an implementation of the `JsonSerialize` trait.
+///
+/// Fields may serialized with a distinct name using the `rename` attribute, accepting a string
+/// literal for the key to serialize as (`rename("key")`).
+///
+/// As a procedural macro, this will panic causing a compile-time error on any unexpected input.
+#[proc_macro_derive(JsonSerialize, attributes(rename))]
+pub fn derive_json_serialize(object: TokenStream) -> TokenStream {
+  let Struct { generic_bounds, generics, name, fields } = parse_struct(object);
+
+  let mut fields_serialization = String::new();
+  for (i, (field_name, serialization_field_name)) in fields.iter().enumerate() {
+    let comma = if (i + 1) == fields.len() { "" } else { r#".chain(core::iter::once(','))"# };
+
+    fields_serialization.push_str(&format!(
+      r#"
+      .chain("{serialization_field_name}".serialize())
+      .chain(core::iter::once(':'))
+      .chain(core_json_traits::JsonSerialize::serialize(&self.{field_name}))
+      {comma}
+      "#
+    ));
+  }
+
+  TokenStream::from_str(&format!(
+    r#"
+    impl{generic_bounds} core_json_traits::JsonSerialize for {name}{generics} {{
+      fn serialize(&self) -> impl Iterator<Item = char> {{
+        core::iter::once('{{')
+        {fields_serialization}
+        .chain(core::iter::once('}}'))
+      }}
+    }}
+    "#
+  ))
+  .expect("typo in implementation of `JsonSerialize`")
 }

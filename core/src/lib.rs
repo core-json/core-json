@@ -246,8 +246,8 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
         // This is a distinct unit value
         _ => {
           // https://datatracker.ietf.org/doc/html/rfc8259#section-3 defines all possible values
-          let is_number = match number::as_number(bytes) {
-            Ok((len, _)) => Some(len),
+          let is_number = match number::is_number_str(bytes) {
+            Ok(len) => Some(len),
             Err(JsonError::TypeError) => None,
             Err(e) => Err(e)?,
           };
@@ -670,18 +670,107 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
   pub fn as_i64(&self) -> Result<i64, JsonError<'bytes, B, S>> {
     let bytes = &self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes;
 
-    let (i, str) = number::as_number_str(bytes)?;
-    let str = core::str::from_utf8(&str[.. i]).map_err(|_| JsonError::InternalError)?;
-    if str.contains('.') || str.contains('e') || str.contains('E') {
+    // -9223372036854775808
+    const MAX_I64_LEN: usize = 20;
+    let len = number::is_number_str(bytes)?;
+    if len > MAX_I64_LEN {
       Err(JsonError::TypeError)?;
     }
+
+    let mut str = [0; MAX_I64_LEN];
+    #[allow(clippy::needless_range_loop)]
+    for i in 0 .. len {
+      let byte = bytes.peek(i).map_err(JsonError::BytesError)?;
+      if matches!(byte, b'.' | b'e' | b'E') {
+        Err(JsonError::TypeError)?;
+      }
+      str[i] = byte;
+    }
+    let str = core::str::from_utf8(&str[.. len]).map_err(|_| JsonError::InternalError)?;
     <i64 as core::str::FromStr>::from_str(str).map_err(|_| JsonError::TypeError)
   }
 
   /// Get the current item as an `f64`.
-  #[inline(always)]
+  ///
+  /// This may be lossy due to the inherent nature of floats combined with Rust's bounds on
+  /// precision.
   pub fn as_f64(&self) -> Result<f64, JsonError<'bytes, B, S>> {
-    Ok(number::as_number(&self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes)?.1)
+    let bytes = &self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes;
+
+    /*
+      The syntax for this (expanded) is
+      `[ minus ] int [ decimal-point 1*DIGIT ] [ e [ minus / plus ] 1*DIGIT ]`.
+
+      https://datatracker.ietf.org/doc/html/rfc8259#section-6 lets us specify the range, precision
+      of numbers.
+
+      We bind `minus`, `decimal-point`, `e`, `plus` to a maximum length of 1 as they definitively
+      have a length of 1. We bind the integer part to a maximum length of `f64::MAX_10_EXP + 1`,
+      the maximum length of a normal integer. We bind the fractional part to `f64::DIGITS`, the
+      amount of significant digits Rust can definitely convert back/forth with a base-10
+      serialization without loss of information. We bind the exponent to four digits as `f64` has
+      a maximum exponent `1000 < e < 2000`.
+    */
+    const MAX_DOUBLE_LEN: usize =
+      1 + ((f64::MAX_10_EXP as usize) + 1) + 1 + (f64::DIGITS as usize) + 1 + 1 + 4;
+    let len = number::is_number_str(bytes)?;
+
+    let mut src = 0;
+    let mut dst = 0;
+    let mut str = [0; MAX_DOUBLE_LEN];
+    let mut found_non_zero_digit = false;
+    let mut found_decimal = false;
+    let mut insignificant_digits = None;
+    #[allow(clippy::explicit_counter_loop)]
+    for i in 0 .. len {
+      let byte = bytes.peek(src).map_err(JsonError::BytesError)?;
+      src += 1;
+
+      /*
+        If we've found the leading digit, and this is within the decimal component, declare where
+        the insignificant digits begin.
+      */
+      if matches!(byte, b'1' ..= b'9') {
+        found_non_zero_digit = true;
+        if found_decimal {
+          insignificant_digits = i.checked_add(f64::DIGITS as usize - 1);
+        }
+      }
+
+      // If this is the opening of the fractional part, note the index it was opened at
+      if byte == b'.' {
+        found_decimal = true;
+        if found_non_zero_digit {
+          insignificant_digits = i.checked_add(f64::DIGITS as usize);
+        }
+      }
+
+      /*
+        If this is a fractional part with more significant digits than we can reasonably handle,
+        ignore the rest. This lets us handle serializations with greater precision, whose
+        serialization length exceeds our limit, so as long as the integer, exponent terms are
+        sufficiently bounded.
+      */
+      if let Some(insignificant_digits) = insignificant_digits {
+        if (i > insignificant_digits) && byte.is_ascii_digit() {
+          continue;
+        }
+      }
+
+      // If this an exponent, reset `insignificant_digits` so we start handling digits again
+      if matches!(byte, b'e' | b'E') {
+        insignificant_digits = None;
+      }
+
+      if dst == str.len() {
+        Err(JsonError::TypeError)?;
+      }
+      // Copy into the byte buffer for the string
+      str[dst] = byte;
+      dst += 1;
+    }
+    let str = core::str::from_utf8(&str[.. len]).map_err(|_| JsonError::InternalError)?;
+    <f64 as core::str::FromStr>::from_str(str).map_err(|_| JsonError::TypeError)
   }
 
   /// Get the current item as a `bool`.

@@ -8,16 +8,16 @@ A macro to automatically derive `JsonDeserialize` and `JsonStructure` from
 This crate can be used quite directly as follows.
 
 ```rs
-#[derive(core_json_derive::JsonDeserialize)]
+#[derive(core_json_derive::JsonDeserialize, core_json_derive::JsonSerialize)]
 struct MyStruct {
   abc_def: Vec<u8>,
 }
 ```
 
-We do support deserializing fields under a distinct name with the `rename` attribute.
+We do support (de)serializing fields under a distinct name with the `rename` attribute.
 
 ```rs
-#[derive(core_json_derive::JsonDeserialize)]
+#[derive(core_json_derive::JsonDeserialize, core_json_derive::JsonSerialize)]
 struct MyStruct {
   #[rename("abcDef")]
   abc_def: Vec<u8>,
@@ -35,3 +35,10 @@ where `serialization: &[u8]`. The constant parameter for `ConstStack`
 determines how deep objects within the serialization are allowed to be. To
 support objects of unbounded depth, `Vec` may be used, but this is not
 recommended due to denial of service concerns.
+
+Serialization to a string may occur as follows.
+
+```rs
+use core_json_traits::*;
+my_struct.serialize().collect::<String>()
+```

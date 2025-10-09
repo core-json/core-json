@@ -9,7 +9,15 @@ extern crate alloc;
 pub use core_json::*;
 
 mod primitives;
+mod float;
+mod option;
 mod sequences;
+mod string;
+
+#[cfg(feature = "alloc")]
+mod boxed;
+
+pub use float::JsonF64;
 
 /// An item which can be deserialized from a `Value`.
 ///
@@ -39,32 +47,11 @@ pub trait JsonStructure: JsonDeserialize {
   }
 }
 
-impl<T: JsonDeserialize> JsonDeserialize for Option<T> {
-  /// This will accept `null` as a representation of `None`.
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
-    if value.is_null()? {
-      return Ok(None);
-    }
-    T::deserialize(value).map(Some)
-  }
-}
-
-#[cfg(feature = "alloc")]
-impl JsonDeserialize for alloc::string::String {
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
-    value.to_str()?.collect()
-  }
-}
-
-#[cfg(feature = "alloc")]
-impl<T: JsonDeserialize> JsonDeserialize for alloc::boxed::Box<T> {
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
-    T::deserialize(value).map(Into::into)
-  }
+/// An item which can be serialized as JSON.
+pub trait JsonSerialize {
+  /// Serialize this item as JSON.
+  ///
+  /// This returns an `impl Iterator<Item = char>` to maintain support for serializing without
+  /// requiring an allocator.
+  fn serialize(&self) -> impl Iterator<Item = char>;
 }
