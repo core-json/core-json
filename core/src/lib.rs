@@ -48,6 +48,42 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Clone for JsonError<'bytes, B, S> {
 }
 impl<'bytes, B: BytesLike<'bytes>, S: Stack> Copy for JsonError<'bytes, B, S> {}
 
+/// The type of the value.
+///
+/// https://datatracker.ietf.org/doc/html/rfc8259#section-3 defines all possible values.
+pub enum Type {
+  /// An object.
+  Object,
+  /// An array.
+  Array,
+  /// A string.
+  String,
+  /// A RFC-8259 number.
+  Number,
+  /// A boolean.
+  Bool,
+  /// The `null` unit value.
+  Null,
+}
+
+/// Get the type of the current item.
+///
+/// This does not assert it's a valid instance of this class of items. It solely asserts if this
+/// is a valid item, it will be of this type.
+#[inline(always)]
+fn kind<'bytes, B: BytesLike<'bytes>, S: Stack>(
+  bytes: &B,
+) -> Result<Type, JsonError<'bytes, B, S>> {
+  Ok(match bytes.peek(0).map_err(JsonError::BytesError)? {
+    b'{' => Type::Object,
+    b'[' => Type::Array,
+    b'"' => Type::String,
+    b't' | b'f' => Type::Bool,
+    b'n' => Type::Null,
+    _ => Type::Number,
+  })
+}
+
 /// Interpret the immediate value within the bytes as a `bool`.
 #[inline(always)]
 fn as_bool<'bytes, B: BytesLike<'bytes>, S: Stack>(
@@ -231,56 +267,38 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
       stack.pop().ok_or(JsonError::InternalError)?;
 
       let mut result = SingleStepResult::Unknown(SingleStepUnknownResult::Advanced);
-      match bytes.peek(0).map_err(JsonError::BytesError)? {
+      match kind(bytes)? {
         // Handle if this opens an object
-        b'{' => {
+        Type::Object => {
           bytes.advance(1).map_err(JsonError::BytesError)?;
           advance_whitespace(bytes)?;
           stack.push(State::Object).map_err(JsonError::StackError)?;
           return Ok(SingleStepResult::Unknown(SingleStepUnknownResult::ObjectOpened));
         }
         // Handle if this opens an array
-        b'[' => {
+        Type::Array => {
           bytes.advance(1).map_err(JsonError::BytesError)?;
           advance_whitespace(bytes)?;
           stack.push(State::Array).map_err(JsonError::StackError)?;
           return Ok(SingleStepResult::Unknown(SingleStepUnknownResult::ArrayOpened));
         }
         // Handle if this opens an string
-        b'"' => {
+        Type::String => {
           bytes.advance(1).map_err(JsonError::BytesError)?;
           // Read past the string
           result = SingleStepResult::Unknown(SingleStepUnknownResult::String(read_string(bytes)?));
         }
-        // This is a distinct unit value
-        _ => {
-          // https://datatracker.ietf.org/doc/html/rfc8259#section-3 defines all possible values
-          let is_number = match number::is_number_str(bytes) {
-            Ok(len) => Some(len),
-            Err(JsonError::TypeError) => None,
-            Err(e) => Err(e)?,
-          };
-          let is_bool = match as_bool(bytes) {
-            Ok(value) => Some(if value { 4 } else { 5 }),
-            Err(JsonError::TypeError) => None,
-            Err(e) => Err(e)?,
-          };
-          let is_null = match is_null(bytes) {
-            Ok(is_null) => {
-              if is_null {
-                Some(4)
-              } else {
-                None
-              }
-            }
-            Err(e) => Err(e)?,
-          };
-
-          if let Some(len) = is_number.or(is_bool).or(is_null) {
-            bytes.advance(len).map_err(JsonError::BytesError)?;
-          } else {
-            Err(JsonError::InvalidValue)?;
+        Type::Number => {
+          bytes.advance(number::is_number_str(bytes)?).map_err(JsonError::BytesError)?;
+        }
+        Type::Bool => {
+          bytes.advance(if as_bool(bytes)? { 4 } else { 5 }).map_err(JsonError::BytesError)?;
+        }
+        Type::Null => {
+          if !is_null(bytes)? {
+            Err(JsonError::TypeError)?;
           }
+          bytes.advance(4).map_err(JsonError::BytesError)?;
         }
       }
 
@@ -395,7 +413,7 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Deserializer<'bytes, B, S> {
       Err(JsonError::ReusedDeserializer)?;
     }
     let result = Value { deserializer: Some(self) };
-    if !(result.is_object()? || result.is_array()?) {
+    if !matches!(result.kind()?, Type::Object | Type::Array) {
       Err(JsonError::TypeError)?;
     }
     Ok(result)
@@ -565,21 +583,6 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> ArrayIterator<'bytes, 'par
 }
 
 impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, S> {
-  /// Check if the current item is an object.
-  #[inline(always)]
-  pub fn is_object(&self) -> Result<bool, JsonError<'bytes, B, S>> {
-    Ok(
-      self
-        .deserializer
-        .as_ref()
-        .ok_or(JsonError::InternalError)?
-        .bytes
-        .peek(0)
-        .map_err(JsonError::BytesError)? ==
-        b'{',
-    )
-  }
-
   /// Iterate over the fields within this object.
   ///
   /// If a field is present multiple times, this will yield each instance.
@@ -595,21 +598,6 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
       }
       _ => Err(JsonError::TypeError),
     }
-  }
-
-  /// Check if the current item is an array.
-  #[inline(always)]
-  pub fn is_array(&self) -> Result<bool, JsonError<'bytes, B, S>> {
-    Ok(
-      self
-        .deserializer
-        .as_ref()
-        .ok_or(JsonError::InternalError)?
-        .bytes
-        .peek(0)
-        .map_err(JsonError::BytesError)? ==
-        b'[',
-    )
   }
 
   /// Iterate over all items within this container.
@@ -629,19 +617,13 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
     }
   }
 
-  /// Check if the current item is a string.
+  /// Get the type of the current item.
+  ///
+  /// This does not assert it's a valid instance of this class of items. It solely asserts if this
+  /// is a valid item, it will be of this type.
   #[inline(always)]
-  pub fn is_str(&self) -> Result<bool, JsonError<'bytes, B, S>> {
-    Ok(
-      self
-        .deserializer
-        .as_ref()
-        .ok_or(JsonError::InternalError)?
-        .bytes
-        .peek(0)
-        .map_err(JsonError::BytesError)? ==
-        b'"',
-    )
+  pub fn kind(&self) -> Result<Type, JsonError<'bytes, B, S>> {
+    kind(&self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes)
   }
 
   /// Get the current item as a 'string'.
@@ -796,7 +778,10 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
 
   /// Check if the current item is `null`.
   #[inline(always)]
-  pub fn is_null(&self) -> Result<bool, JsonError<'bytes, B, S>> {
-    is_null(&self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes)
+  pub fn as_null(&self) -> Result<(), JsonError<'bytes, B, S>> {
+    if is_null(&self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes)? {
+      return Ok(());
+    }
+    Err(JsonError::TypeError)?
   }
 }

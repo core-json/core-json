@@ -27,8 +27,8 @@ mod tests {
         let mut deserializer =
           core_json::Deserializer::<_, core_json::ConstStack<4>>::new(encoding.as_slice()).unwrap();
         let value = deserializer.value().unwrap();
-        let is_object = value.is_object().unwrap();
-        let is_array = value.is_array().unwrap();
+        let is_object = matches!(value.kind().unwrap(), core_json::Type::Object);
+        let is_array = matches!(value.kind().unwrap(), core_json::Type::Array);
         if is_object {
           let mut fields = value.fields().unwrap();
           while let Some(field) = fields.next() {
@@ -91,8 +91,12 @@ mod tests {
         continue;
       };
       let Ok(value) = deserializer.value() else { continue };
-      let Ok(is_object) = value.is_object() else { continue };
-      let Ok(is_array) = value.is_array() else { continue };
+      let Ok(is_object) = value.kind().map(|kind| matches!(kind, core_json::Type::Object)) else {
+        continue;
+      };
+      let Ok(is_array) = value.kind().map(|kind| matches!(kind, core_json::Type::Array)) else {
+        continue;
+      };
       if is_object {
         let Ok(mut fields) = value.fields() else { continue };
         while let Some(field) = fields.next() {

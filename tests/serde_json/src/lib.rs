@@ -1,3 +1,4 @@
+use core_json::Type;
 use serde_json::Value;
 
 /*
@@ -58,7 +59,10 @@ fn check_null(encoding: &[u8], _value: &Value, path: &[PathElement]) {
     core_json::Deserializer::<_, core_json::ConstStack<128>>::new(encoding).unwrap();
   {
     let null = deserializer.value().unwrap();
-    descend(null, path, |null: core_json::Value<_, _>| assert!(null.is_null().unwrap()));
+    descend(null, path, |null: core_json::Value<_, _>| {
+      assert!(matches!(null.kind().unwrap(), Type::Null));
+      let () = null.as_null().unwrap();
+    });
   }
   assert!(deserializer.value().is_err());
 }
@@ -69,6 +73,7 @@ fn check_bool(encoding: &[u8], value: &Value, path: &[PathElement]) {
   {
     let boolean = deserializer.value().unwrap();
     descend(boolean, path, |boolean: core_json::Value<_, _>| {
+      assert!(matches!(boolean.kind().unwrap(), Type::Bool));
       assert_eq!(boolean.as_bool().unwrap(), value.as_bool().unwrap())
     });
   }
@@ -87,6 +92,7 @@ fn check_number(encoding: &[u8], value: &Value, path: &[PathElement]) {
   {
     let number = deserializer.value().unwrap();
     descend(number, path, |number: core_json::Value<_, _>| {
+      assert!(matches!(number.kind().unwrap(), Type::Number));
       let expected = value.as_number().unwrap();
       if expected.is_i64() {
         assert_eq!(number.as_i64().unwrap(), expected.as_i64().unwrap());
@@ -106,7 +112,7 @@ fn check_string(encoding: &[u8], value: &Value, path: &[PathElement]) {
   {
     let string = deserializer.value().unwrap();
     descend(string, path, |string: core_json::Value<_, _>| {
-      assert!(string.is_str().unwrap());
+      assert!(matches!(string.kind().unwrap(), Type::String));
       assert!(
         value.as_str().unwrap() == string.to_str().unwrap().collect::<Result<String, _>>().unwrap()
       );
@@ -125,7 +131,7 @@ fn check_object(encoding: &[u8], value: &Value, path: &mut Vec<PathElement>) {
     {
       let object = deserializer.value().unwrap();
       descend(object, path, |object: core_json::Value<_, _>| {
-        assert!(object.is_object().unwrap());
+        assert!(matches!(object.kind().unwrap(), Type::Object));
         let mut fields = object.fields().unwrap();
         let mut len = 0;
         while let Some(next) = fields.next() {
@@ -156,7 +162,7 @@ fn check_array(encoding: &[u8], value: &Value, path: &mut Vec<PathElement>) {
     {
       let array = deserializer.value().unwrap();
       descend(array, path, |array: core_json::Value<_, _>| {
-        assert!(array.is_array().unwrap());
+        assert!(matches!(array.kind().unwrap(), Type::Array));
         let mut values = array.iterate().unwrap();
         let mut len = 0;
         while let Some(next) = values.next() {

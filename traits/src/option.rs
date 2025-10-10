@@ -1,11 +1,11 @@
-use crate::{BytesLike, Stack, JsonError, Value, JsonDeserialize, JsonSerialize};
+use crate::{BytesLike, Stack, JsonError, Type, Value, JsonDeserialize, JsonSerialize};
 
 impl<T: JsonDeserialize> JsonDeserialize for Option<T> {
   /// This will accept `null` as a representation of `None`.
   fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
     value: Value<'bytes, 'parent, B, S>,
   ) -> Result<Self, JsonError<'bytes, B, S>> {
-    if value.is_null()? {
+    if matches!(value.kind()?, Type::Null) {
       return Ok(None);
     }
     T::deserialize(value).map(Some)

@@ -54,8 +54,12 @@ mod tests {
         continue;
       };
       let Ok(value) = deserializer.value() else { continue };
-      let Ok(is_object) = value.is_object() else { continue };
-      let Ok(is_array) = value.is_array() else { continue };
+      let Ok(is_object) = value.kind().map(|kind| matches!(kind, core_json::Type::Object)) else {
+        continue;
+      };
+      let Ok(is_array) = value.kind().map(|kind| matches!(kind, core_json::Type::Array)) else {
+        continue;
+      };
       if is_object {
         let Ok(mut fields) = value.fields() else { continue };
         while let Some(field) = fields.next() {
