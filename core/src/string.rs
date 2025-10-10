@@ -2,13 +2,20 @@ use core::marker::PhantomData;
 
 use crate::{BytesLike, String, Stack, JsonError};
 
-/// Peek a UTF-8 codepoint from bytes.
+/// Peek a UTF-8 character from bytes.
+///
+/// Returns the length when encoded and the character itself.
+#[inline(always)]
 fn peek_utf8<'bytes, B: BytesLike<'bytes>, S: Stack>(
   bytes: &B,
   i: usize,
-) -> Result<char, JsonError<'bytes, B, S>> {
+) -> Result<(usize, char), JsonError<'bytes, B, S>> {
   let mut utf8_codepoint = [0; 4];
   utf8_codepoint[0] = bytes.peek(i).map_err(JsonError::BytesError)?;
+  // If this is ASCII, immediately return it.
+  if utf8_codepoint[0] <= 0x7f {
+    return Ok((1, utf8_codepoint[0] as char));
+  }
   let utf8_codepoint_len = usize::from({
     let first_bit_set = (utf8_codepoint[0] & (1 << 7)) != 0;
     let third_bit_set = (utf8_codepoint[0] & (1 << 5)) != 0;
@@ -24,7 +31,7 @@ fn peek_utf8<'bytes, B: BytesLike<'bytes>, S: Stack>(
   }
 
   let str = core::str::from_utf8(utf8_codepoint).map_err(|_| JsonError::InvalidValue)?;
-  str.chars().next().ok_or(JsonError::InternalError)
+  Ok((utf8_codepoint_len, str.chars().next().ok_or(JsonError::InternalError)?))
 }
 
 /// Read a just-opened string from a JSON serialization.
@@ -36,7 +43,7 @@ pub(crate) fn read_string<'bytes, B: BytesLike<'bytes>, S: Stack>(
   {
     let mut escaping = false;
     loop {
-      let this = peek_utf8(bytes, i)?;
+      let (_, this) = peek_utf8(bytes, i)?;
 
       // https://datatracker.ietf.org/doc/html/rfc8259#section-7
       let unescaped =
@@ -52,11 +59,12 @@ pub(crate) fn read_string<'bytes, B: BytesLike<'bytes>, S: Stack>(
         }
 
         // If this is "\u", check it's followed by hex characters
+        // We use `peek`, not `peek_utf8` here, as hex characters will be ASCII
         if (this == '\x75') &&
-          (!(peek_utf8(bytes, i + 1)?.is_ascii_hexdigit() &&
-            peek_utf8(bytes, i + 2)?.is_ascii_hexdigit() &&
-            peek_utf8(bytes, i + 3)?.is_ascii_hexdigit() &&
-            peek_utf8(bytes, i + 4)?.is_ascii_hexdigit()))
+          (!(bytes.peek(i + 1).map_err(JsonError::BytesError)?.is_ascii_hexdigit() &&
+            bytes.peek(i + 2).map_err(JsonError::BytesError)?.is_ascii_hexdigit() &&
+            bytes.peek(i + 3).map_err(JsonError::BytesError)?.is_ascii_hexdigit() &&
+            bytes.peek(i + 4).map_err(JsonError::BytesError)?.is_ascii_hexdigit()))
         {
           Err(JsonError::InvalidValue)?;
         }
@@ -87,6 +95,7 @@ pub(crate) struct UnescapeString<'bytes, B: BytesLike<'bytes>, S: Stack> {
 impl<'bytes, B: BytesLike<'bytes>, S: Stack> From<String<'bytes, B>>
   for UnescapeString<'bytes, B, S>
 {
+  #[inline(always)]
   fn from(string: String<'bytes, B>) -> Self {
     Self { remaining: string.len(), string: string.consume(), _stack: PhantomData }
   }
@@ -101,9 +110,7 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Iterator for UnescapeString<'bytes,
 
     let res = (|| {
       {
-        let next_char = peek_utf8(&self.string, 0)?;
-
-        let len = next_char.len_utf8();
+        let (len, next_char) = peek_utf8(&self.string, 0)?;
         // `InternalError`: `BytesLike` read past its declared length
         self.remaining = self.remaining.checked_sub(len).ok_or(JsonError::InternalError)?;
         self.string.advance(len).map_err(JsonError::BytesError)?;
