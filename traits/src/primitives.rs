@@ -4,28 +4,43 @@ impl JsonDeserialize for i8 {
   fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
     value: Value<'bytes, 'parent, B, S>,
   ) -> Result<Self, JsonError<'bytes, B, S>> {
-    value.as_i64()?.try_into().map_err(|_| JsonError::TypeError)
+    value
+      .to_number()?
+      .i64()
+      .ok_or(JsonError::TypeError)?
+      .try_into()
+      .map_err(|_| JsonError::TypeError)
   }
 }
 impl JsonDeserialize for i16 {
   fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
     value: Value<'bytes, 'parent, B, S>,
   ) -> Result<Self, JsonError<'bytes, B, S>> {
-    value.as_i64()?.try_into().map_err(|_| JsonError::TypeError)
+    value
+      .to_number()?
+      .i64()
+      .ok_or(JsonError::TypeError)?
+      .try_into()
+      .map_err(|_| JsonError::TypeError)
   }
 }
 impl JsonDeserialize for i32 {
   fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
     value: Value<'bytes, 'parent, B, S>,
   ) -> Result<Self, JsonError<'bytes, B, S>> {
-    value.as_i64()?.try_into().map_err(|_| JsonError::TypeError)
+    value
+      .to_number()?
+      .i64()
+      .ok_or(JsonError::TypeError)?
+      .try_into()
+      .map_err(|_| JsonError::TypeError)
   }
 }
 impl JsonDeserialize for i64 {
   fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
     value: Value<'bytes, 'parent, B, S>,
   ) -> Result<Self, JsonError<'bytes, B, S>> {
-    value.as_i64()
+    value.to_number()?.i64().ok_or(JsonError::TypeError)
   }
 }
 
@@ -33,28 +48,48 @@ impl JsonDeserialize for u8 {
   fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
     value: Value<'bytes, 'parent, B, S>,
   ) -> Result<Self, JsonError<'bytes, B, S>> {
-    value.as_i64()?.try_into().map_err(|_| JsonError::TypeError)
+    value
+      .to_number()?
+      .i64()
+      .ok_or(JsonError::TypeError)?
+      .try_into()
+      .map_err(|_| JsonError::TypeError)
   }
 }
 impl JsonDeserialize for u16 {
   fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
     value: Value<'bytes, 'parent, B, S>,
   ) -> Result<Self, JsonError<'bytes, B, S>> {
-    value.as_i64()?.try_into().map_err(|_| JsonError::TypeError)
+    value
+      .to_number()?
+      .i64()
+      .ok_or(JsonError::TypeError)?
+      .try_into()
+      .map_err(|_| JsonError::TypeError)
   }
 }
 impl JsonDeserialize for u32 {
   fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
     value: Value<'bytes, 'parent, B, S>,
   ) -> Result<Self, JsonError<'bytes, B, S>> {
-    value.as_i64()?.try_into().map_err(|_| JsonError::TypeError)
+    value
+      .to_number()?
+      .i64()
+      .ok_or(JsonError::TypeError)?
+      .try_into()
+      .map_err(|_| JsonError::TypeError)
   }
 }
 impl JsonDeserialize for u64 {
   fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
     value: Value<'bytes, 'parent, B, S>,
   ) -> Result<Self, JsonError<'bytes, B, S>> {
-    value.as_i64()?.try_into().map_err(|_| JsonError::TypeError)
+    value
+      .to_number()?
+      .i64()
+      .ok_or(JsonError::TypeError)?
+      .try_into()
+      .map_err(|_| JsonError::TypeError)
   }
 }
 

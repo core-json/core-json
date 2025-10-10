@@ -95,9 +95,9 @@ fn check_number(encoding: &[u8], value: &Value, path: &[PathElement]) {
       assert!(matches!(number.kind().unwrap(), Type::Number));
       let expected = value.as_number().unwrap();
       if expected.is_i64() {
-        assert_eq!(number.as_i64().unwrap(), expected.as_i64().unwrap());
+        assert_eq!(number.to_number().unwrap().i64().unwrap(), expected.as_i64().unwrap());
       } else if expected.is_f64() {
-        let number = number.as_f64().unwrap();
+        let number = number.to_number().unwrap().f64().unwrap();
         let expected = expected.as_f64().unwrap();
         check_float(number, expected)
       }
