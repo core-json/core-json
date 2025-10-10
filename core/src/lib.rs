@@ -85,50 +85,6 @@ fn kind<'bytes, B: BytesLike<'bytes>, S: Stack>(
   })
 }
 
-/// Interpret the immediate value within the bytes as a `bool`.
-#[inline(always)]
-fn as_bool<'bytes, B: BytesLike<'bytes>, S: Stack>(
-  bytes: &B,
-) -> Result<bool, JsonError<'bytes, B, S>> {
-  let first = bytes.peek(0).map_err(JsonError::BytesError)?;
-  // Return early if this definitely isn't a valid `bool`
-  if !matches!(first, b't' | b'f') {
-    Err(JsonError::TypeError)?;
-  }
-  let second = bytes.peek(1).map_err(JsonError::BytesError)?;
-  let third = bytes.peek(2).map_err(JsonError::BytesError)?;
-  let fourth = bytes.peek(3).map_err(JsonError::BytesError)?;
-  let fifth = bytes.peek(4).map_err(JsonError::BytesError)?;
-
-  let is_true = (first, second, third, fourth) == (b't', b'r', b'u', b'e');
-  let is_false = (first, second, third, fourth, fifth) == (b'f', b'a', b'l', b's', b'e');
-
-  if !(is_true || is_false) {
-    Err(JsonError::TypeError)?;
-  }
-
-  Ok(is_true)
-}
-
-/// Check if the immediate value within the bytes is `null`.
-#[inline(always)]
-fn is_null<'bytes, B: BytesLike<'bytes>, S: Stack>(
-  bytes: &B,
-) -> Result<bool, JsonError<'bytes, B, S>> {
-  let first = bytes.peek(0).map_err(JsonError::BytesError)?;
-  if first != b'n' {
-    return Ok(false);
-  }
-  let second = bytes.peek(1).map_err(JsonError::BytesError)?;
-  let third = bytes.peek(2).map_err(JsonError::BytesError)?;
-  let fourth = bytes.peek(3).map_err(JsonError::BytesError)?;
-
-  if (second, third, fourth) != (b'u', b'l', b'l') {
-    Err(JsonError::InvalidValue)?;
-  }
-  Ok(true)
-}
-
 /// Advance the bytes until there's a non-whitespace character.
 #[inline(always)]
 fn advance_whitespace<'bytes, B: BytesLike<'bytes>, S: Stack>(
@@ -193,8 +149,10 @@ enum SingleStepUnknownResult<'bytes, B: BytesLike<'bytes>> {
   String(String<'bytes, B>),
   /// A number was read.
   Number(Number),
-  /// A unit value was advanced past.
-  Advanced,
+  /// A boolean value was advanced past.
+  Bool(bool),
+  /// Null was advanced past.
+  Null,
 }
 
 /// The result from a single step of the deserializer.
@@ -269,8 +227,7 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
     State::Unknown => {
       stack.pop().ok_or(JsonError::InternalError)?;
 
-      let mut result = SingleStepResult::Unknown(SingleStepUnknownResult::Advanced);
-      match kind(bytes)? {
+      let result = match kind(bytes)? {
         // Handle if this opens an object
         Type::Object => {
           bytes.advance(1).map_err(JsonError::BytesError)?;
@@ -288,23 +245,34 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
         // Handle if this opens an string
         Type::String => {
           bytes.advance(1).map_err(JsonError::BytesError)?;
-          result = SingleStepResult::Unknown(SingleStepUnknownResult::String(read_string(bytes)?));
+          SingleStepResult::Unknown(SingleStepUnknownResult::String(read_string(bytes)?))
         }
         Type::Number => {
-          result = SingleStepResult::Unknown(SingleStepUnknownResult::Number(
-            number::to_number_str(bytes)?,
-          ));
+          SingleStepResult::Unknown(SingleStepUnknownResult::Number(number::to_number_str(bytes)?))
         }
         Type::Bool => {
-          bytes.advance(if as_bool(bytes)? { 4 } else { 5 }).map_err(JsonError::BytesError)?;
+          let mut bool_string = [0; 5];
+          bytes.read_into_slice(&mut bool_string[.. 4]).map_err(JsonError::BytesError)?;
+          let bool = if &bool_string[.. 4] == b"true" {
+            true
+          } else {
+            bytes.read_into_slice(&mut bool_string[4 ..]).map_err(JsonError::BytesError)?;
+            if bool_string != *b"false" {
+              Err(JsonError::TypeError)?;
+            }
+            false
+          };
+          SingleStepResult::Unknown(SingleStepUnknownResult::Bool(bool))
         }
         Type::Null => {
-          if !is_null(bytes)? {
+          let mut null_string = [0; 4];
+          bytes.read_into_slice(&mut null_string).map_err(JsonError::BytesError)?;
+          if null_string != *b"null" {
             Err(JsonError::TypeError)?;
           }
-          bytes.advance(4).map_err(JsonError::BytesError)?;
+          SingleStepResult::Unknown(SingleStepUnknownResult::Null)
         }
-      }
+      };
 
       // We now have to read past the next comma, or to the next closing of a structure
       advance_past_comma_or_to_close(bytes)?;
@@ -367,7 +335,8 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop for Value<'bytes, 'pa
             // We successfully advanced past this item
             SingleStepUnknownResult::String(_) |
             SingleStepUnknownResult::Number(_) |
-            SingleStepUnknownResult::Advanced => return,
+            SingleStepUnknownResult::Bool(_) |
+            SingleStepUnknownResult::Null => return,
             // We opened an object/array we now have to advance past
             SingleStepUnknownResult::ObjectOpened | SingleStepUnknownResult::ArrayOpened => 1,
           }
@@ -669,16 +638,24 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
 
   /// Get the current item as a `bool`.
   #[inline(always)]
-  pub fn as_bool(&self) -> Result<bool, JsonError<'bytes, B, S>> {
-    as_bool(&self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes)
+  pub fn to_bool(mut self) -> Result<bool, JsonError<'bytes, B, S>> {
+    let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
+    match single_step(&mut deserializer.bytes, &mut deserializer.stack)? {
+      SingleStepResult::Unknown(SingleStepUnknownResult::Bool(bool)) => Ok(bool),
+      _ => Err(JsonError::TypeError),
+    }
   }
 
-  /// Check if the current item is `null`.
+  /// Get the current item as `null`.
+  ///
+  /// The point of this method is to assert the value is `null` _and valid_. `kind` only tells the
+  /// caller if it's a valid value, it will be `null`.
   #[inline(always)]
-  pub fn as_null(&self) -> Result<(), JsonError<'bytes, B, S>> {
-    if is_null(&self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes)? {
-      return Ok(());
+  pub fn to_null(mut self) -> Result<(), JsonError<'bytes, B, S>> {
+    let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
+    match single_step(&mut deserializer.bytes, &mut deserializer.stack)? {
+      SingleStepResult::Unknown(SingleStepUnknownResult::Null) => Ok(()),
+      _ => Err(JsonError::TypeError),
     }
-    Err(JsonError::TypeError)?
   }
 }

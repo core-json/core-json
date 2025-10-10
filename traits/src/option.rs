@@ -6,6 +6,7 @@ impl<T: JsonDeserialize> JsonDeserialize for Option<T> {
     value: Value<'bytes, 'parent, B, S>,
   ) -> Result<Self, JsonError<'bytes, B, S>> {
     if matches!(value.kind()?, Type::Null) {
+      let () = value.to_null()?;
       return Ok(None);
     }
     T::deserialize(value).map(Some)

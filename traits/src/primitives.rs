@@ -97,7 +97,7 @@ impl JsonDeserialize for bool {
   fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
     value: Value<'bytes, 'parent, B, S>,
   ) -> Result<Self, JsonError<'bytes, B, S>> {
-    value.as_bool()
+    value.to_bool()
   }
 }
 

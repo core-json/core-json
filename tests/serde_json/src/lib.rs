@@ -61,7 +61,7 @@ fn check_null(encoding: &[u8], _value: &Value, path: &[PathElement]) {
     let null = deserializer.value().unwrap();
     descend(null, path, |null: core_json::Value<_, _>| {
       assert!(matches!(null.kind().unwrap(), Type::Null));
-      let () = null.as_null().unwrap();
+      let () = null.to_null().unwrap();
     });
   }
   assert!(deserializer.value().is_err());
@@ -74,7 +74,7 @@ fn check_bool(encoding: &[u8], value: &Value, path: &[PathElement]) {
     let boolean = deserializer.value().unwrap();
     descend(boolean, path, |boolean: core_json::Value<_, _>| {
       assert!(matches!(boolean.kind().unwrap(), Type::Bool));
-      assert_eq!(boolean.as_bool().unwrap(), value.as_bool().unwrap())
+      assert_eq!(boolean.to_bool().unwrap(), value.as_bool().unwrap())
     });
   }
   assert!(deserializer.value().is_err());
