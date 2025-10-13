@@ -149,47 +149,42 @@ pub(crate) fn read_string<'bytes, B: BytesLike<'bytes>, S: Stack>(
 ) -> Result<String<'bytes, B>, JsonError<'bytes, B, S>> {
   // Find the location of the terminating quote
   let mut i = 0;
-  {
-    let mut escaping = false;
-    loop {
-      let (_, this) = peek_utf8(bytes, i)?;
+  loop {
+    let (this_len, this) = peek_utf8(bytes, i)?;
 
-      // https://datatracker.ietf.org/doc/html/rfc8259#section-7
-      let unescaped =
-        matches!(this, '\x20' ..= '\x21' | '\x23' ..= '\x5b' | '\x5d' ..= '\u{10ffff}');
+    // https://datatracker.ietf.org/doc/html/rfc8259#section-7
+    match this {
+      // The characters allowed to be unescaped
+      '\x20' ..= '\x21' | '\x23' ..= '\x5b' | '\x5d' ..= '\u{10ffff}' => i += this_len,
+      // The escaping character
+      '\\' => {
+        i += this_len;
 
-      // If we're escaping the current character, check it's valid to be escaped
-      if escaping {
-        if !matches!(
-          this,
-          '\x22' | '\x5c' | '\x2f' | '\x62' | '\x66' | '\x6e' | '\x72' | '\x74' | '\x75'
-        ) {
-          Err(JsonError::InvalidValue)?;
-        }
+        // All characters which are valid to be escaped are ASCII, allowing us to use `peek` here
+        let escaped = bytes.peek(i).map_err(JsonError::BytesError)?;
+        i += 1;
+        match escaped {
+          b'\x22' | b'\x5c' | b'\x2f' | b'\x62' | b'\x66' | b'\x6e' | b'\x72' | b'\x74' => {}
+          // If this is "\u", check it's followed by hex characters
+          b'\x75' => {
+            // We use `peek`, not `peek_utf8` here, as hex characters will be ASCII
+            let bytes = [
+              bytes.peek(i).map_err(JsonError::BytesError)?,
+              bytes.peek(i + 1).map_err(JsonError::BytesError)?,
+              bytes.peek(i + 2).map_err(JsonError::BytesError)?,
+              bytes.peek(i + 3).map_err(JsonError::BytesError)?,
+            ];
+            i += 4;
 
-        // If this is "\u", check it's followed by hex characters
-        if this == '\x75' {
-          // We use `peek`, not `peek_utf8` here, as hex characters will be ASCII
-          let bytes = [
-            bytes.peek(i + 1).map_err(JsonError::BytesError)?,
-            bytes.peek(i + 2).map_err(JsonError::BytesError)?,
-            bytes.peek(i + 3).map_err(JsonError::BytesError)?,
-            bytes.peek(i + 4).map_err(JsonError::BytesError)?,
-          ];
-
-          if !validate_hex(bytes) {
-            Err(JsonError::InvalidValue)?;
+            if !validate_hex(bytes) {
+              Err(JsonError::InvalidValue)?;
+            }
           }
+          _ => Err(JsonError::InvalidValue)?,
         }
-      } else if this == '"' {
-        break;
       }
-
-      if !(unescaped || escaping || (this == '\\')) {
-        Err(JsonError::InvalidValue)?;
-      }
-      escaping = (!escaping) && (this == '\\');
-      i += this.len_utf8();
+      '"' => break,
+      _ => Err(JsonError::InvalidValue)?,
     }
   }
 
