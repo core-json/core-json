@@ -44,10 +44,13 @@ impl<T: 'static + JsonDeserialize> JsonStructure for Vec<T> {}
 impl<T: JsonSerialize> JsonSerialize for [T] {
   fn serialize(&self) -> impl Iterator<Item = char> {
     core::iter::once('[')
-      .chain(self.iter().enumerate().flat_map(|(i, elem)| {
-        let last_item = (i + 1) == self.len();
-        elem.serialize().chain((!last_item).then(|| core::iter::once(',')).into_iter().flatten())
-      }))
+      .chain(
+        self
+          .iter()
+          .take(self.len().saturating_sub(1))
+          .flat_map(|elem| elem.serialize().chain(core::iter::once(','))),
+      )
+      .chain(self.get(self.len().saturating_sub(1)).into_iter().flat_map(JsonSerialize::serialize))
       .chain(core::iter::once(']'))
   }
 }
