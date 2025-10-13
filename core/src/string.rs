@@ -2,6 +2,15 @@ use core::marker::PhantomData;
 
 use crate::{BytesLike, String, Stack, JsonError};
 
+/// Calculate the length of the non-ASCII UTF-8 codepoint from its first byte.
+///
+/// Returns an undefined value if the codepoint is ASCII.
+#[inline(always)]
+fn non_ascii_utf8_codepoint_len(b: u8) -> usize {
+  // The amount of zeroes in a `u8` will be positive and fit within a `usize`
+  ((!(b | 0b0100_0000)) | 0b1111).leading_zeros() as usize
+}
+
 /// Peek a UTF-8 character from bytes.
 ///
 /// Returns the length when encoded and the character itself.
@@ -13,18 +22,11 @@ fn peek_utf8<'bytes, B: BytesLike<'bytes>, S: Stack>(
   let mut utf8_codepoint = [0; 4];
   utf8_codepoint[0] = bytes.peek(i).map_err(JsonError::BytesError)?;
   // If this is ASCII, immediately return it.
-  if utf8_codepoint[0] <= 0x7f {
+  if (utf8_codepoint[0] >> 7) == 0 {
     return Ok((1, utf8_codepoint[0] as char));
   }
-  let utf8_codepoint_len = usize::from({
-    let first_bit_set = (utf8_codepoint[0] & (1 << 7)) != 0;
-    let third_bit_set = (utf8_codepoint[0] & (1 << 5)) != 0;
-    let fourth_bit_set = (utf8_codepoint[0] & (1 << 4)) != 0;
-    1u8 +
-      u8::from(first_bit_set) +
-      u8::from(first_bit_set & third_bit_set) +
-      u8::from(first_bit_set & third_bit_set & fourth_bit_set)
-  });
+  let utf8_codepoint_len = non_ascii_utf8_codepoint_len(utf8_codepoint[0]);
+
   let utf8_codepoint = &mut utf8_codepoint[.. utf8_codepoint_len];
   for (j, byte) in utf8_codepoint.iter_mut().enumerate().skip(1) {
     *byte = bytes.peek(i + j).map_err(JsonError::BytesError)?;
@@ -298,6 +300,63 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Iterator for UnescapeString<'bytes,
     }
 
     Some(res)
+  }
+}
+
+#[test]
+fn test_non_ascii_utf8_codepoint_len() {
+  let mut unicode = 1;
+  while char::from_u32(unicode).map(char::len_utf8).unwrap_or(0) != 2 {
+    unicode <<= 1;
+  }
+  assert_eq!(
+    non_ascii_utf8_codepoint_len(char::from_u32(unicode).unwrap().to_string().as_bytes()[0]),
+    2
+  );
+  while char::from_u32(unicode).map(char::len_utf8).unwrap_or(0) != 3 {
+    unicode <<= 1;
+  }
+  assert_eq!(
+    non_ascii_utf8_codepoint_len(char::from_u32(unicode).unwrap().to_string().as_bytes()[0]),
+    3
+  );
+  while char::from_u32(unicode).map(char::len_utf8).unwrap_or(0) != 4 {
+    unicode <<= 1;
+  }
+  assert_eq!(
+    non_ascii_utf8_codepoint_len(char::from_u32(unicode).unwrap().to_string().as_bytes()[0]),
+    4
+  );
+}
+
+#[test]
+fn bench_non_ascii_utf8_codepoint_len() {
+  #[cfg(debug_assertions)]
+  const ITERATIONS: u64 = 1_000_000_000u64;
+  #[cfg(not(debug_assertions))]
+  const ITERATIONS: u64 = 20_000_000_000u64;
+
+  let unicode = "\u{FFFF}".as_bytes()[0];
+  {
+    let start = std::time::Instant::now();
+    for _ in 0 .. ITERATIONS {
+      let _ = core::hint::black_box(non_ascii_utf8_codepoint_len(core::hint::black_box(unicode)));
+    }
+    println!("`non_ascii_utf8_codepoint_len` took {}ms", start.elapsed().as_millis());
+  }
+
+  {
+    let start = std::time::Instant::now();
+    for _ in 0 .. ITERATIONS {
+      let b = core::hint::black_box(unicode);
+      let _ = core::hint::black_box(usize::from({
+        let third_bit_set = (b >> 5) & 1;
+        // We don't have to `& 1` here as we take it with `third_bit_set` which has `& 1`
+        let fourth_bit_set = b >> 4;
+        2u8 + third_bit_set + (third_bit_set & fourth_bit_set)
+      }));
+    }
+    println!("bit-shifting implementation took {}ms", start.elapsed().as_millis());
   }
 }
 

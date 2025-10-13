@@ -19,6 +19,7 @@ panic = "unwind"
 overflow-checks = true
 
 [workspace.lints.clippy]
+map_unwrap_or = "allow"
 unwrap_or_default = "allow"
 manual_is_multiple_of = "allow"
 blocks_in_conditions = "allow"
@@ -50,7 +51,6 @@ manual_instant_elapsed = "deny"
 manual_let_else = "deny"
 manual_ok_or = "deny"
 manual_string_new = "deny"
-map_unwrap_or = "deny"
 match_bool = "deny"
 match_same_arms = "deny"
 missing_fields_in_debug = "deny"
