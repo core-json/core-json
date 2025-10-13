@@ -296,10 +296,19 @@ impl NumberSink {
       None?;
     }
 
-    // We do this manually, instead of using `i64::from_str`, to avoid the overhead of
-    // `str::from_utf8`/usage of `unsafe`
+    /*
+      We do this manually, instead of using `i64::from_str`, to avoid the overhead of
+      `str::from_utf8`/usage of `unsafe`. We also do the first loop, with wrapping arithmetic, when
+      we know the value won't overflow, only doing the final steps with checked arithmetic, when
+      the value might overflow.
+    */
     let mut accum = 0i64;
-    for digit in self.digits.iter().take(significant_digits) {
+    for digit in self.digits.iter().take(significant_digits.min(18)) {
+      accum = accum.wrapping_mul(10);
+      let digit = i64::from(digit - b'0');
+      accum = accum.wrapping_add(if self.negative { -digit } else { digit });
+    }
+    for digit in &self.digits[18 .. significant_digits.max(18)] {
       accum = accum.checked_mul(10)?;
       let digit = i64::from(digit - b'0');
       accum = accum.checked_add(if self.negative { -digit } else { digit })?;
