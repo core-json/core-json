@@ -102,96 +102,90 @@ impl JsonDeserialize for bool {
 }
 
 struct IntInterator {
-  value: u64,
-  digits: usize,
+  buf: [u8; 20],
   i: usize,
+  len: usize,
 }
 impl IntInterator {
-  fn new(value: u64) -> Self {
-    let digits = {
-      let mut digits = 0;
-      let mut value = value;
-      while value > 0 {
-        digits += 1;
-        value /= 10;
+  fn new(value: impl core::fmt::Display) -> Self {
+    use core::fmt::Write;
+
+    /// A `core::fmt::Write` which writes to a slice.
+    ///
+    /// We use this to achieve a non-allocating `core::fmt::Write` for primitives we know a bound
+    /// for.
+    struct SliceWrite<'a>(&'a mut [u8], usize);
+    impl<'a> Write for SliceWrite<'a> {
+      #[inline(always)]
+      fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let remaining = self.0.len() - self.1;
+        if remaining < s.len() {
+          Err(core::fmt::Error)?;
+        }
+        self.0[self.1 .. (self.1 + s.len())].copy_from_slice(s.as_bytes());
+        self.1 += s.len();
+        Ok(())
       }
-      digits
-    };
-    IntInterator { value, digits, i: 0 }
+    }
+
+    let mut buf = [0; 20];
+    let mut writer = SliceWrite(&mut buf, 0);
+    write!(&mut writer, "{}", value).expect("integer primitive exceeded 20 base-10 digits");
+    let len = writer.1;
+
+    IntInterator { buf, i: 0, len }
   }
 }
 impl Iterator for IntInterator {
   type Item = char;
   fn next(&mut self) -> Option<Self::Item> {
-    if self.i == self.digits {
+    if self.i == self.len {
       None?;
     }
-
-    let mut value = self.value;
-    // There will be at least one digit, as `self.i` starts at `0`
-    for _ in self.i .. (self.digits - 1) {
-      value /= 10;
-    }
+    let result = self.buf[self.i];
     self.i += 1;
-
-    // Safe to cast as this will be `< 10`, which fits within a `u8`
-    let char_offset = (value % 10) as u8;
-    // Safe to cast as this will be `'0' ..= '9'`
-    Some((b'0' + char_offset) as char)
+    // This is a safe cast so long as Rust's display of an `u64` yields ASCII
+    Some(result as char)
   }
-}
-fn u64_to_str(value: impl Into<u64>) -> impl Iterator<Item = char> {
-  let value = value.into();
-  let zero = value == 0;
-  zero.then(|| core::iter::once('0')).into_iter().flatten().chain(IntInterator::new(value))
-}
-pub(crate) fn i64_to_str(value: impl Into<i64>) -> impl Iterator<Item = char> {
-  let value: i64 = value.into();
-  value
-    .is_negative()
-    .then(|| core::iter::once('-'))
-    .into_iter()
-    .flatten()
-    .chain(u64_to_str(value.unsigned_abs()))
 }
 impl JsonSerialize for i8 {
   fn serialize(&self) -> impl Iterator<Item = char> {
-    i64_to_str(*self)
+    IntInterator::new(*self)
   }
 }
 impl JsonSerialize for i16 {
   fn serialize(&self) -> impl Iterator<Item = char> {
-    i64_to_str(*self)
+    IntInterator::new(*self)
   }
 }
 impl JsonSerialize for i32 {
   fn serialize(&self) -> impl Iterator<Item = char> {
-    i64_to_str(*self)
+    IntInterator::new(*self)
   }
 }
 impl JsonSerialize for i64 {
   fn serialize(&self) -> impl Iterator<Item = char> {
-    i64_to_str(*self)
+    IntInterator::new(*self)
   }
 }
 impl JsonSerialize for u8 {
   fn serialize(&self) -> impl Iterator<Item = char> {
-    u64_to_str(*self)
+    IntInterator::new(*self)
   }
 }
 impl JsonSerialize for u16 {
   fn serialize(&self) -> impl Iterator<Item = char> {
-    u64_to_str(*self)
+    IntInterator::new(*self)
   }
 }
 impl JsonSerialize for u32 {
   fn serialize(&self) -> impl Iterator<Item = char> {
-    u64_to_str(*self)
+    IntInterator::new(*self)
   }
 }
 impl JsonSerialize for u64 {
   fn serialize(&self) -> impl Iterator<Item = char> {
-    u64_to_str(*self)
+    IntInterator::new(*self)
   }
 }
 
@@ -199,4 +193,13 @@ impl JsonSerialize for bool {
   fn serialize(&self) -> impl Iterator<Item = char> {
     (if *self { "true" } else { "false" }).chars()
   }
+}
+
+#[test]
+fn test_int_iterator() {
+  assert_eq!(JsonSerialize::serialize(&0u8).collect::<String>(), "0");
+  assert_eq!(JsonSerialize::serialize(&1u8).collect::<String>(), "1");
+  assert_eq!(JsonSerialize::serialize(&u64::MAX).collect::<String>(), format!("{}", u64::MAX));
+  assert_eq!(JsonSerialize::serialize(&i64::MAX).collect::<String>(), format!("{}", i64::MAX));
+  assert_eq!(JsonSerialize::serialize(&i64::MIN).collect::<String>(), format!("{}", i64::MIN));
 }
