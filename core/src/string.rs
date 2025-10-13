@@ -11,6 +11,34 @@ fn non_ascii_utf8_codepoint_len(b: u8) -> usize {
   ((!(b | 0b0100_0000)) | 0b1111).leading_zeros() as usize
 }
 
+/// Convert a UTF-8 codepoint to a `char`.
+#[inline(always)]
+fn utf8_codepoint_to_char<'bytes, B: BytesLike<'bytes>, S: Stack>(
+  c: &[u8],
+) -> Result<char, JsonError<'bytes, B, S>> {
+  // https://en.wikipedia.org/wiki/UTF-8#Description
+  // The last six bits of every byte, except the first for which it depends on the length of the
+  // entire codepoint
+  const SIX_BITS: u8 = 0b0011_1111;
+  char::from_u32(match c.len() {
+    1 => u32::from(c[0]),
+    2 => (u32::from(c[0] & 0b0001_1111) << 6) | u32::from(c[1] & SIX_BITS),
+    3 => {
+      (u32::from(c[0] & 0b0000_1111) << 12) |
+        (u32::from(c[1] & SIX_BITS) << 6) |
+        u32::from(c[2] & SIX_BITS)
+    }
+    4 => {
+      (u32::from(c[0] & 0b0000_0111) << 18) |
+        (u32::from(c[1] & SIX_BITS) << 12) |
+        (u32::from(c[2] & SIX_BITS) << 6) |
+        u32::from(c[3] & SIX_BITS)
+    }
+    _ => unreachable!("non-ASCII codepoints have length in `2 ..= 4`"),
+  })
+  .ok_or(JsonError::InvalidValue)
+}
+
 /// Peek a UTF-8 character from bytes.
 ///
 /// Returns the length when encoded and the character itself.
@@ -32,8 +60,7 @@ fn peek_utf8<'bytes, B: BytesLike<'bytes>, S: Stack>(
     *byte = bytes.peek(i + j).map_err(JsonError::BytesError)?;
   }
 
-  let str = core::str::from_utf8(utf8_codepoint).map_err(|_| JsonError::InvalidValue)?;
-  Ok((utf8_codepoint_len, str.chars().next().ok_or(JsonError::InternalError)?))
+  utf8_codepoint_to_char(utf8_codepoint).map(|char| (utf8_codepoint_len, char))
 }
 
 #[must_use]
@@ -357,6 +384,72 @@ fn bench_non_ascii_utf8_codepoint_len() {
       }));
     }
     println!("bit-shifting implementation took {}ms", start.elapsed().as_millis());
+  }
+}
+
+#[test]
+fn test_utf8_codepoint_to_char() {
+  let mut unicode = 1;
+  while char::from_u32(unicode).map(char::len_utf8).unwrap_or(0) != 2 {
+    unicode <<= 1;
+  }
+  assert_eq!(
+    utf8_codepoint_to_char::<&[u8], crate::ConstStack<0>>(
+      char::from_u32(unicode).unwrap().to_string().as_bytes()
+    )
+    .unwrap(),
+    char::from_u32(unicode).unwrap()
+  );
+  while char::from_u32(unicode).map(char::len_utf8).unwrap_or(0) != 3 {
+    unicode <<= 1;
+  }
+  assert_eq!(
+    utf8_codepoint_to_char::<&[u8], crate::ConstStack<0>>(
+      char::from_u32(unicode).unwrap().to_string().as_bytes()
+    )
+    .unwrap(),
+    char::from_u32(unicode).unwrap()
+  );
+  while char::from_u32(unicode).map(char::len_utf8).unwrap_or(0) != 4 {
+    unicode <<= 1;
+  }
+  assert_eq!(
+    utf8_codepoint_to_char::<&[u8], crate::ConstStack<0>>(
+      char::from_u32(unicode).unwrap().to_string().as_bytes()
+    )
+    .unwrap(),
+    char::from_u32(unicode).unwrap()
+  );
+}
+
+#[test]
+fn bench_utf8_codepoint_to_char() {
+  #[cfg(debug_assertions)]
+  const ITERATIONS: u64 = 1_000_000_000u64;
+  #[cfg(not(debug_assertions))]
+  const ITERATIONS: u64 = 20_000_000_000u64;
+
+  let utf8_codepoint = "\u{FFFF}".as_bytes();
+  {
+    let start = std::time::Instant::now();
+    for _ in 0 .. ITERATIONS {
+      let _ = core::hint::black_box(
+        utf8_codepoint_to_char::<&[u8], crate::ConstStack<0>>(core::hint::black_box(
+          utf8_codepoint,
+        ))
+        .unwrap(),
+      );
+    }
+    println!("`utf8_codepoint_to_char` took {}ms", start.elapsed().as_millis());
+  }
+
+  {
+    let start = std::time::Instant::now();
+    for _ in 0 .. ITERATIONS {
+      let str = core::str::from_utf8(core::hint::black_box(utf8_codepoint)).unwrap();
+      let _ = core::hint::black_box(str.chars().next().unwrap());
+    }
+    println!("`core::str::from_utf8().chars().next()` took {}ms", start.elapsed().as_millis());
   }
 }
 
