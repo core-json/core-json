@@ -101,6 +101,15 @@ impl JsonDeserialize for bool {
   }
 }
 
+/// Deserialize `null` as `()`.
+impl JsonDeserialize for () {
+  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
+    value: Value<'bytes, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'bytes, B, S>> {
+    value.to_null()
+  }
+}
+
 struct IntInterator {
   buf: [u8; 20],
   i: usize,
@@ -192,6 +201,13 @@ impl JsonSerialize for u64 {
 impl JsonSerialize for bool {
   fn serialize(&self) -> impl Iterator<Item = char> {
     (if *self { "true" } else { "false" }).chars()
+  }
+}
+
+/// Serialize `()` as `null`.
+impl JsonSerialize for () {
+  fn serialize(&self) -> impl Iterator<Item = char> {
+    "null".chars()
   }
 }
 
