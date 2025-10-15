@@ -1,6 +1,6 @@
 use core::marker::PhantomData;
 
-use crate::{BytesLike, String, Stack, JsonError};
+use crate::{BytesLike, Stack, JsonError};
 
 /// Calculate the length of the non-ASCII UTF-8 codepoint from its first byte.
 ///
@@ -143,10 +143,17 @@ fn validate_hex(bytes: [u8; 4]) -> bool {
   (ascii & number_or_alpha) == HIGH_BITS
 }
 
+/// An iterator which yields the characters for an escaped string serialized within JSON.
+pub(crate) struct String<'bytes, B: BytesLike<'bytes>, S: Stack> {
+  string: B,
+  remaining: usize,
+  _stack: PhantomData<(&'bytes (), S)>,
+}
+
 /// Read a just-opened string from a JSON serialization.
 pub(crate) fn read_string<'bytes, B: BytesLike<'bytes>, S: Stack>(
   bytes: &mut B,
-) -> Result<String<'bytes, B>, JsonError<'bytes, B, S>> {
+) -> Result<String<'bytes, B, S>, JsonError<'bytes, B, S>> {
   // Find the location of the terminating quote
   let mut i = 0;
   loop {
@@ -188,27 +195,13 @@ pub(crate) fn read_string<'bytes, B: BytesLike<'bytes>, S: Stack>(
     }
   }
 
-  let (len, str_bytes) = bytes.read_bytes(i).map_err(JsonError::BytesError)?;
+  let str_bytes = bytes.read_bytes(i).map_err(JsonError::BytesError)?;
   // Advance past the closing `"`
   bytes.advance(1).map_err(JsonError::BytesError)?;
-  Ok(String { len, bytes: str_bytes, _encoding: PhantomData })
+  Ok(String { remaining: i, string: str_bytes, _stack: PhantomData })
 }
 
-/// An interator which yields the characters for an escaped string serialized within JSON.
-pub(crate) struct UnescapeString<'bytes, B: BytesLike<'bytes>, S: Stack> {
-  string: B,
-  remaining: usize,
-  _stack: PhantomData<(&'bytes (), S)>,
-}
-impl<'bytes, B: BytesLike<'bytes>, S: Stack> From<String<'bytes, B>>
-  for UnescapeString<'bytes, B, S>
-{
-  #[inline(always)]
-  fn from(string: String<'bytes, B>) -> Self {
-    Self { remaining: string.len(), string: string.consume(), _stack: PhantomData }
-  }
-}
-impl<'bytes, B: BytesLike<'bytes>, S: Stack> Iterator for UnescapeString<'bytes, B, S> {
+impl<'bytes, B: BytesLike<'bytes>, S: Stack> Iterator for String<'bytes, B, S> {
   type Item = Result<char, JsonError<'bytes, B, S>>;
   fn next(&mut self) -> Option<Self::Item> {
     // Check if the string is empty

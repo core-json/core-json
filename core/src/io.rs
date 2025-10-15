@@ -1,6 +1,6 @@
 //! IO primitives around bytes.
 
-use core::{marker::PhantomData, fmt::Debug};
+use core::fmt::Debug;
 
 /// An item which is like a `&[u8]`.
 ///
@@ -10,25 +10,13 @@ pub trait BytesLike<'bytes>: Sized + Debug {
   /// The type for errors when interacting with these bytes.
   type Error: Sized + Copy + Debug;
 
-  /// The type representing the length of a _read_ `BytesLike`, if a `BytesLike` does not
-  /// inherently know its length.
-  ///
-  /// This should be `usize` or `()`.
-  type ExternallyTrackedLength: Sized + Copy + Debug;
-
-  /// The length of these bytes.
-  fn len(&self, len: Self::ExternallyTrackedLength) -> usize;
-
   /// Peak at a byte.
   fn peek(&self, i: usize) -> Result<u8, Self::Error>;
 
   /// Read a fixed amount of bytes from the container.
   ///
-  /// This MUST return `Ok((len, slice))` where `slice` is the expected length or `Err(_)`.
-  fn read_bytes(
-    &mut self,
-    bytes: usize,
-  ) -> Result<(Self::ExternallyTrackedLength, Self), Self::Error>;
+  /// This MUST return `Ok(slice)` where `slice` has the expected length or `Err(_)`.
+  fn read_bytes(&mut self, bytes: usize) -> Result<Self, Self::Error>;
 
   /// Read a fixed amount of bytes from the container into a slice.
   /*
@@ -63,59 +51,24 @@ pub enum SliceError {
 impl<'bytes> BytesLike<'bytes> for &'bytes [u8] {
   type Error = SliceError;
 
-  type ExternallyTrackedLength = ();
-
-  #[inline(always)]
-  fn len(&self, (): ()) -> usize {
-    <[u8]>::len(self)
-  }
-
   #[inline(always)]
   fn peek(&self, i: usize) -> Result<u8, Self::Error> {
-    self.get(i).ok_or_else(|| SliceError::Short((i - <[u8]>::len(self)).saturating_add(1))).copied()
+    self.get(i).ok_or_else(|| SliceError::Short((i - self.len()).saturating_add(1))).copied()
   }
 
   #[inline(always)]
-  fn read_bytes(
-    &mut self,
-    bytes: usize,
-  ) -> Result<(Self::ExternallyTrackedLength, Self), Self::Error> {
-    if <[u8]>::len(self) < bytes {
+  fn read_bytes(&mut self, bytes: usize) -> Result<Self, Self::Error> {
+    if self.len() < bytes {
       Err(SliceError::Short(bytes))?;
     }
     let res = &self[.. bytes];
     *self = &self[bytes ..];
-    Ok(((), res))
+    Ok(res)
   }
 
   #[inline(always)]
   fn read_into_slice(&mut self, slice: &mut [u8]) -> Result<(), Self::Error> {
-    slice.copy_from_slice(self.read_bytes(slice.len())?.1);
+    slice.copy_from_slice(self.read_bytes(slice.len())?);
     Ok(())
-  }
-}
-
-/// A collection of bytes with an associated length.
-///
-/// This avoids defining `BytesLike::len` which lets us relax the requirement `BytesLike` knows its
-/// length before it has reached its end.
-#[derive(Debug)]
-pub(crate) struct String<'bytes, B: BytesLike<'bytes>> {
-  pub(crate) len: B::ExternallyTrackedLength,
-  pub(crate) bytes: B,
-  pub(crate) _encoding: PhantomData<&'bytes ()>,
-}
-
-impl<'bytes, B: BytesLike<'bytes>> String<'bytes, B> {
-  /// The length of this string.
-  #[inline(always)]
-  pub(crate) fn len(&self) -> usize {
-    self.bytes.len(self.len)
-  }
-
-  /// Consume this into its underlying bytes.
-  #[inline(always)]
-  pub(crate) fn consume(self) -> B {
-    self.bytes
   }
 }

@@ -57,12 +57,6 @@ impl<R: Clone + Read<Error: Copy>> From<R> for ReadAdapter<R> {
 impl<R: Clone + Read<Error: Copy>> BytesLike<'static> for ReadAdapter<R> {
   type Error = Error<R>;
 
-  type ExternallyTrackedLength = usize;
-
-  fn len(&self, len: Self::ExternallyTrackedLength) -> usize {
-    len
-  }
-
   fn peek(&self, mut i: usize) -> Result<u8, Self::Error> {
     let mut peek = self.reader.clone();
 
@@ -79,11 +73,8 @@ impl<R: Clone + Read<Error: Copy>> BytesLike<'static> for ReadAdapter<R> {
     Ok(buf[0])
   }
 
-  fn read_bytes(
-    &mut self,
-    mut bytes: usize,
-  ) -> Result<(Self::ExternallyTrackedLength, Self), Self::Error> {
-    let result = (bytes, Self { reader: self.reader.clone(), bound: Some(bytes) });
+  fn read_bytes(&mut self, mut bytes: usize) -> Result<Self, Self::Error> {
+    let result = Self { reader: self.reader.clone(), bound: Some(bytes) };
 
     // Skip ahead
     let mut buf = [0; 8];
@@ -128,12 +119,6 @@ impl<R: Clone + Read<Error: Copy> + Seek> From<R> for SeekAdapter<R> {
 impl<R: Clone + Read<Error: Copy> + Seek> BytesLike<'static> for SeekAdapter<R> {
   type Error = Error<R>;
 
-  type ExternallyTrackedLength = usize;
-
-  fn len(&self, len: Self::ExternallyTrackedLength) -> usize {
-    len
-  }
-
   fn peek(&self, i: usize) -> Result<u8, Self::Error> {
     let i = i64::try_from(i).map_err(|_| Error::InternalError)?;
 
@@ -151,12 +136,8 @@ impl<R: Clone + Read<Error: Copy> + Seek> BytesLike<'static> for SeekAdapter<R> 
     Ok(buf[0])
   }
 
-  fn read_bytes(
-    &mut self,
-    bytes: usize,
-  ) -> Result<(Self::ExternallyTrackedLength, Self), Self::Error> {
-    let result =
-      (bytes, Self { reader: RefCell::new(self.reader.borrow().clone()), bound: Some(bytes) });
+  fn read_bytes(&mut self, bytes: usize) -> Result<Self, Self::Error> {
+    let result = Self { reader: RefCell::new(self.reader.borrow().clone()), bound: Some(bytes) };
 
     self
       .reader
