@@ -17,10 +17,38 @@ rustdoc-args = ["--cfg", "docsrs"]
 [lints]
 workspace = true
 
+[[bench]]
+name = "null_array"
+harness = false
+
+[[bench]]
+name = "bool_array"
+harness = false
+
+[[bench]]
+name = "int_array"
+harness = false
+
+[[bench]]
+name = "float_array"
+harness = false
+
+[[bench]]
+name = "ascii"
+harness = false
+
+[[bench]]
+name = "unicode_hex"
+harness = false
+
+[[bench]]
+name = "unicode"
+harness = false
+
 [dependencies]
 rand_core = { version = "0.6", features = ["getrandom"] }
 core-json = { path = "../../core" }
-core-json-traits = { path = "../../traits" }
+core-json-traits = { path = "../../traits", features = ["alloc"] }
 serde_json = "1"
 
 [features]
