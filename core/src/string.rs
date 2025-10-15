@@ -63,6 +63,24 @@ fn peek_utf8<'bytes, B: BytesLike<'bytes>, S: Stack>(
   utf8_codepoint_to_char(utf8_codepoint).map(|char| (utf8_codepoint_len, char))
 }
 
+/// `peek_utf8`, yet reading instead of peeking.
+#[inline(always)]
+fn read_utf8<'bytes, B: BytesLike<'bytes>, S: Stack>(
+  bytes: &mut B,
+) -> Result<char, JsonError<'bytes, B, S>> {
+  let mut utf8_codepoint = [0; 4];
+  utf8_codepoint[0] = bytes.read_byte().map_err(JsonError::BytesError)?;
+  // If this is ASCII, immediately return it.
+  if (utf8_codepoint[0] >> 7) == 0 {
+    return Ok(utf8_codepoint[0] as char);
+  }
+  let utf8_codepoint_len = non_ascii_utf8_codepoint_len(utf8_codepoint[0]);
+
+  let utf8_codepoint = &mut utf8_codepoint[.. utf8_codepoint_len];
+  bytes.read_into_slice(&mut utf8_codepoint[1 ..]).map_err(JsonError::BytesError)?;
+  utf8_codepoint_to_char(utf8_codepoint)
+}
+
 #[must_use]
 #[inline(always)]
 fn validate_hex(bytes: [u8; 4]) -> bool {
@@ -143,10 +161,10 @@ fn validate_hex(bytes: [u8; 4]) -> bool {
   (ascii & number_or_alpha) == HIGH_BITS
 }
 
-/// An iterator which yields the characters for an escaped string serialized within JSON.
+/// An iterator which yields the characters of a string represented within a JSON serialization.
 pub(crate) struct String<'bytes, B: BytesLike<'bytes>, S: Stack> {
   string: B,
-  remaining: usize,
+  remaining_chars: usize,
   _stack: PhantomData<(&'bytes (), S)>,
 }
 
@@ -155,6 +173,7 @@ pub(crate) fn read_string<'bytes, B: BytesLike<'bytes>, S: Stack>(
   bytes: &mut B,
 ) -> Result<String<'bytes, B, S>, JsonError<'bytes, B, S>> {
   // Find the location of the terminating quote
+  let mut chars = 0;
   let mut i = 0;
   loop {
     let (this_len, this) = peek_utf8(bytes, i)?;
@@ -193,125 +212,118 @@ pub(crate) fn read_string<'bytes, B: BytesLike<'bytes>, S: Stack>(
       '"' => break,
       _ => Err(JsonError::InvalidValue)?,
     }
+
+    chars += 1;
   }
 
   let str_bytes = bytes.read_bytes(i).map_err(JsonError::BytesError)?;
   // Advance past the closing `"`
   bytes.advance(1).map_err(JsonError::BytesError)?;
-  Ok(String { remaining: i, string: str_bytes, _stack: PhantomData })
+
+  Ok(String { string: str_bytes, remaining_chars: chars, _stack: PhantomData })
 }
 
 impl<'bytes, B: BytesLike<'bytes>, S: Stack> Iterator for String<'bytes, B, S> {
   type Item = Result<char, JsonError<'bytes, B, S>>;
+  #[inline(always)]
   fn next(&mut self) -> Option<Self::Item> {
-    // Check if the string is empty
-    if self.remaining == 0 {
-      None?;
-    }
+    self.remaining_chars = self.remaining_chars.checked_sub(1)?;
 
-    let res = (|| {
-      {
-        let (len, next_char) = peek_utf8(&self.string, 0)?;
-        // `InternalError`: `BytesLike` read past its declared length
-        self.remaining = self.remaining.checked_sub(len).ok_or(JsonError::InternalError)?;
-        self.string.advance(len).map_err(JsonError::BytesError)?;
+    let res = match read_utf8(&mut self.string) {
+      // Handle if this is an escape character
+      Ok('\\') => (|| {
+        // Definitions from https://datatracker.ietf.org/doc/html/rfc8259#section-7
+        match self.string.read_byte().map_err(JsonError::BytesError)? {
+          // If this is to escape the intended character, yield it now
+          b'"' => Ok('"'),
+          b'\\' => Ok('\\'),
+          b'/' => Ok('/'),
+          // If this is to escape a control sequence, yield it now
+          b'b' => Ok('\x08'),
+          b'f' => Ok('\x0c'),
+          b'n' => Ok('\n'),
+          b'r' => Ok('\r'),
+          b't' => Ok('\t'),
 
-        // If this isn't an escape character, yield it
-        if next_char != '\\' {
-          return Ok(next_char);
-        }
-      }
-
-      // Definitions from https://datatracker.ietf.org/doc/html/rfc8259#section-7
-      match {
-        // `InternalError`: Escape character without following escaped values
-        self.remaining = self.remaining.checked_sub(1).ok_or(JsonError::InternalError)?;
-        self.string.read_byte().map_err(JsonError::BytesError)?
-      } {
-        // If this is to escape the intended character, yield it now
-        b'"' => Ok('"'),
-        b'\\' => Ok('\\'),
-        b'/' => Ok('/'),
-        // If this is to escape a control sequence, yield it now
-        b'b' => Ok('\x08'),
-        b'f' => Ok('\x0c'),
-        b'n' => Ok('\n'),
-        b'r' => Ok('\r'),
-        b't' => Ok('\t'),
-
-        // Handle if this is a unicode codepoint
-        b'u' => {
-          let mut read_hex = |with_u| {
-            if with_u {
-              let mut backslash_u = [0; 2];
-              self.string.read_into_slice(&mut backslash_u).map_err(JsonError::BytesError)?;
-              if &backslash_u != b"\\u" {
-                Err(JsonError::InvalidValue)?;
+          // Handle if this is a unicode codepoint
+          b'u' => {
+            let mut read_hex = |with_u| {
+              if with_u {
+                let mut backslash_u = [0; 2];
+                self.string.read_into_slice(&mut backslash_u).map_err(JsonError::BytesError)?;
+                if &backslash_u != b"\\u" {
+                  Err(JsonError::InvalidValue)?;
+                }
               }
-            }
 
-            let mut hex = [0; 4];
-            self.string.read_into_slice(&mut hex).map_err(JsonError::BytesError)?;
-            // `InternalError`: `\u` without following 'hex' bytes being UTF-8
-            let hex = core::str::from_utf8(&hex).map_err(|_| JsonError::InternalError)?;
-            // `InternalError`: `\u` with UTF-8 bytes which weren't hex
-            u16::from_str_radix(hex, 16).map(u32::from).map_err(|_| JsonError::InternalError)
-          };
+              let mut hex = [0; 4];
+              self.string.read_into_slice(&mut hex).map_err(JsonError::BytesError)?;
+              // `InternalError`: `\u` without following 'hex' bytes being UTF-8
+              let hex = core::str::from_utf8(&hex).map_err(|_| JsonError::InternalError)?;
+              // `InternalError`: `\u` with UTF-8 bytes which weren't hex
+              u16::from_str_radix(hex, 16).map(u32::from).map_err(|_| JsonError::InternalError)
+            };
 
-          // Read the hex digits
-          // `InternalError`: `\u` without following hex bytes
-          self.remaining = self.remaining.checked_sub(4).ok_or(JsonError::InternalError)?;
-          let next = read_hex(false)?;
+            // Read the hex digits
+            let next = read_hex(false)?;
 
-          /*
-            If the intended value of this codepoint exceeds 0xffff, it's specified to be encoded
-            with its UTF-16 surrogate pair. We distinguish and fetch the second part if necessary
-            now. For the actual conversion algorithm from the UTF-16 surrogate pair to the UTF
-            codepoint, https://en.wikipedia.org/wiki/UTF-16#U+D800_to_U+DFFF_(surrogates) is
-            used as reference.
-          */
-          let next_is_utf16_high_surrogate = matches!(next, 0xd800 ..= 0xdbff);
-          let codepoint = if next_is_utf16_high_surrogate {
-            let high = (next - 0xd800) << 10;
-
-            // `InvalidValue`: Caller provided an incomplete code point
             /*
-              https://datatracker.ietf.org/doc/html/rfc8259#section-8.2 notes how the syntax allows
-              an incomplete codepoint, further noting the behavior of implementations is
-              unpredictable. The definition of "interoperable" is if the strings are composed
-              entirely of Unicode characters, with an unpaired surrogate being considered as unable
-              to encode a Unicode character.
-
-              As Rust requires `char` be a UTF codepoint, we require the strings be "interoperable"
-              per the RFC 8259 definition. While this may be slightly stricter than the
-              specification alone, it already has plenty of ambiguities due to how many slight
-              differences exist with JSON encoders/decoders.
-
-              Additionally, we'll still decode JSON objects with invalidly specified UTF codepoints
-              within their strings. We just won't support converting them to characters with this
-              iterator. This iterator failing will not cause the deserializer as a whole to fail.
+              If the intended value of this codepoint exceeds 0xffff, it's specified to be encoded
+              with its UTF-16 surrogate pair. We distinguish and fetch the second part if necessary
+              now. For the actual conversion algorithm from the UTF-16 surrogate pair to the UTF
+              codepoint, https://en.wikipedia.org/wiki/UTF-16#U+D800_to_U+DFFF_(surrogates) is
+              used as reference.
             */
-            self.remaining = self.remaining.checked_sub(6).ok_or(JsonError::InvalidValue)?;
-            let low = read_hex(true)?;
+            let next_is_utf16_high_surrogate = matches!(next, 0xd800 ..= 0xdbff);
+            let codepoint = if next_is_utf16_high_surrogate {
+              let high = (next - 0xd800) << 10;
 
-            let Some(low) = low.checked_sub(0xdc00) else { Err(JsonError::InvalidValue)? };
-            high + low + 0x10000
-          } else {
-            // If `next` isn't a surrogate, it's interpreted as a codepoint as-is
-            next
-          };
+              // Decrement `remaining_chars` again as we'd have tracked this as two separate
+              // characters
+              self.remaining_chars -= 1;
+              /*
+                https://datatracker.ietf.org/doc/html/rfc8259#section-8.2 notes how the syntax
+                allows an incomplete codepoint, further noting the behavior of implementations is
+                unpredictable. The definition of "interoperable" is if the strings are composed
+                entirely of Unicode characters, with an unpaired surrogate being considered as
+                unable to encode a Unicode character.
 
-          // Yield the codepoint
-          char::from_u32(codepoint).ok_or(JsonError::InvalidValue)
+                As Rust requires `char` be a UTF codepoint, we require the strings be
+                "interoperable" per the RFC 8259 definition. While this may be slightly stricter
+                than the specification alone, it already has plenty of ambiguities due to how many
+                slight differences exist with JSON encoders/decoders.
+
+                Additionally, we'll still decode JSON objects with invalidly specified UTF
+                codepoints within their strings. We just won't support converting them to
+                characters with this iterator. This iterator failing will not cause the
+                deserializer as a whole to fail.
+              */
+              let low = read_hex(true)?;
+
+              let Some(low) = low.checked_sub(0xdc00) else { Err(JsonError::InvalidValue)? };
+              high + low + 0x10000
+            } else {
+              // If `next` isn't a surrogate, it's interpreted as a codepoint as-is
+              next
+            };
+
+            // Yield the codepoint
+            char::from_u32(codepoint).ok_or(JsonError::InvalidValue)
+          }
+          // `InternalError`: `\` without a recognized following character
+          _ => Err(JsonError::InternalError),
         }
-        // `InternalError`: `\` without a recognized following character
-        _ => Err(JsonError::InternalError),
-      }
-    })();
+      })(),
+      // This isn't an escape character so we may immediately yield it
+      Ok(next_char) => return Some(Ok(next_char)),
+      // Pass-through errors
+      Err(e) => Err(e),
+    };
 
-    // If the result was an error, set `remaining = 0` so all future calls to `next` yield `None`
+    // If the result was an error, set `remaining_chars = 0` so all future calls to `next` yield
+    // `None`
     if res.is_err() {
-      self.remaining = 0;
+      self.remaining_chars = 0;
     }
 
     Some(res)
