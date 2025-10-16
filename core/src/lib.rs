@@ -9,6 +9,7 @@ extern crate alloc;
 mod io;
 mod stack;
 mod string;
+mod string2;
 mod number;
 
 pub use io::BytesLike;
@@ -139,13 +140,13 @@ enum SingleStepArrayResult {
 }
 
 /// The result from a single step of the deserializer, if handling an unknown value.
-enum SingleStepUnknownResult<'bytes, B: BytesLike<'bytes>, S: Stack> {
+enum SingleStepUnknownResult {
   /// An object was opened.
   ObjectOpened,
   /// An array was opened.
   ArrayOpened,
   /// A string was read.
-  String(String<'bytes, B, S>),
+  String,
   /// A number was read.
   Number(Number),
   /// A boolean value was advanced past.
@@ -161,7 +162,7 @@ enum SingleStepResult<'bytes, B: BytesLike<'bytes>, S: Stack> {
   /// The result if within an array.
   Array(SingleStepArrayResult),
   /// The result if handling an unknown value.
-  Unknown(SingleStepUnknownResult<'bytes, B, S>),
+  Unknown(SingleStepUnknownResult),
 }
 
 /// Step the deserializer forwards.
@@ -244,7 +245,7 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
         // Handle if this opens an string
         Type::String => {
           bytes.advance(1).map_err(JsonError::BytesError)?;
-          SingleStepResult::Unknown(SingleStepUnknownResult::String(read_string(bytes)?))
+          return Ok(SingleStepResult::Unknown(SingleStepUnknownResult::String));
         }
         Type::Number => {
           SingleStepResult::Unknown(SingleStepUnknownResult::Number(number::to_number_str(bytes)?))
@@ -279,6 +280,19 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
       Ok(result)
     }
   }
+}
+
+/// Handle a string value.
+///
+/// This MUST be called every time a `SingleStepUnknownResult::String` is yielded, unless the
+/// deserializer is immediately terminated (such as by setting its error to `Some(_)`). This
+/// ideally would be yielded within `SingleStepUnknownResult::String`, yet that would cause every
+/// `SingleStepUnknownResult` to consume the parent's borrow for the rest of its lifetime, when we
+/// only want to consume it upon `SingleStepUnknownResult::String`.
+fn handle_string_value<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
+  deserializer: &'parent mut Deserializer<'bytes, B, S>,
+) -> string2::StringValue<'bytes, 'parent, B, S> {
+  string2::StringValue(string2::String::read(deserializer))
 }
 
 /// A deserializer for a JSON-encoded structure.
@@ -332,10 +346,14 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop for Value<'bytes, 'pa
           };
           match step {
             // We successfully advanced past this item
-            SingleStepUnknownResult::String(_) |
             SingleStepUnknownResult::Number(_) |
             SingleStepUnknownResult::Bool(_) |
             SingleStepUnknownResult::Null => return,
+            // We opened a string we now have to handle
+            SingleStepUnknownResult::String => {
+              handle_string_value(deserializer);
+              return;
+            }
             // We opened an object/array we now have to advance past
             SingleStepUnknownResult::ObjectOpened | SingleStepUnknownResult::ArrayOpened => 1,
           }
@@ -354,6 +372,9 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop for Value<'bytes, 'pa
         match step {
           SingleStepResult::Object(SingleStepObjectResult::Closed) |
           SingleStepResult::Array(SingleStepArrayResult::Closed) => depth -= 1,
+          SingleStepResult::Unknown(SingleStepUnknownResult::String) => {
+            handle_string_value(deserializer);
+          }
           SingleStepResult::Unknown(
             SingleStepUnknownResult::ObjectOpened | SingleStepUnknownResult::ArrayOpened,
           ) => depth += 1,
@@ -554,10 +575,23 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> ArrayIterator<'bytes, 'par
 }
 
 impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, S> {
+  /// Get the type of the current item.
+  ///
+  /// This does not assert it's a valid instance of this class of items. It solely asserts if this
+  /// is a valid item, it will be of this type.
+  #[inline(always)]
+  pub fn kind(&self) -> Result<Type, JsonError<'bytes, B, S>> {
+    kind(&self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes)
+  }
+
   /// Iterate over the fields within this object.
   ///
   /// If a field is present multiple times, this will yield each instance.
   pub fn fields(mut self) -> Result<FieldIterator<'bytes, 'parent, B, S>, JsonError<'bytes, B, S>> {
+    if !matches!(self.kind()?, Type::Object) {
+      Err(JsonError::TypeError)?
+    }
+
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
     if let Some(err) = deserializer.error {
       Err(err)?;
@@ -567,7 +601,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
       SingleStepResult::Unknown(SingleStepUnknownResult::ObjectOpened) => {
         Ok(FieldIterator { deserializer, done: false })
       }
-      _ => Err(JsonError::TypeError),
+      _ => Err(JsonError::InternalError),
     }
   }
 
@@ -575,6 +609,10 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
   pub fn iterate(
     mut self,
   ) -> Result<ArrayIterator<'bytes, 'parent, B, S>, JsonError<'bytes, B, S>> {
+    if !matches!(self.kind()?, Type::Array) {
+      Err(JsonError::TypeError)?
+    }
+
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
     if let Some(err) = deserializer.error {
       Err(err)?;
@@ -584,17 +622,8 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
       SingleStepResult::Unknown(SingleStepUnknownResult::ArrayOpened) => {
         Ok(ArrayIterator { deserializer, done: false })
       }
-      _ => Err(JsonError::TypeError),
+      _ => Err(JsonError::InternalError),
     }
-  }
-
-  /// Get the type of the current item.
-  ///
-  /// This does not assert it's a valid instance of this class of items. It solely asserts if this
-  /// is a valid item, it will be of this type.
-  #[inline(always)]
-  pub fn kind(&self) -> Result<Type, JsonError<'bytes, B, S>> {
-    kind(&self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes)
   }
 
   /// Get the current item as a 'string'.
@@ -610,33 +639,47 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
   pub fn to_str(
     mut self,
   ) -> Result<
-    impl use<'bytes, B, S> + Iterator<Item = Result<char, JsonError<'bytes, B, S>>>,
+    impl use<'bytes, 'parent, B, S> + Iterator<Item = Result<char, JsonError<'bytes, B, S>>>,
     JsonError<'bytes, B, S>,
   > {
+    if !matches!(self.kind()?, Type::String) {
+      Err(JsonError::TypeError)?
+    }
+
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
     match single_step(&mut deserializer.bytes, &mut deserializer.stack)? {
-      SingleStepResult::Unknown(SingleStepUnknownResult::String(str)) => Ok(str),
-      _ => Err(JsonError::TypeError),
+      SingleStepResult::Unknown(SingleStepUnknownResult::String) => {
+        Ok(handle_string_value(deserializer))
+      }
+      _ => Err(JsonError::InternalError),
     }
   }
 
   /// Get the current item as a number.
   #[inline(always)]
   pub fn to_number(mut self) -> Result<Number, JsonError<'bytes, B, S>> {
+    if !matches!(self.kind()?, Type::Number) {
+      Err(JsonError::TypeError)?
+    }
+
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
     match single_step(&mut deserializer.bytes, &mut deserializer.stack)? {
       SingleStepResult::Unknown(SingleStepUnknownResult::Number(number)) => Ok(number),
-      _ => Err(JsonError::TypeError),
+      _ => Err(JsonError::InternalError),
     }
   }
 
   /// Get the current item as a `bool`.
   #[inline(always)]
   pub fn to_bool(mut self) -> Result<bool, JsonError<'bytes, B, S>> {
+    if !matches!(self.kind()?, Type::Bool) {
+      Err(JsonError::TypeError)?
+    }
+
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
     match single_step(&mut deserializer.bytes, &mut deserializer.stack)? {
       SingleStepResult::Unknown(SingleStepUnknownResult::Bool(bool)) => Ok(bool),
-      _ => Err(JsonError::TypeError),
+      _ => Err(JsonError::InternalError),
     }
   }
 
@@ -646,10 +689,14 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
   /// caller if it's a valid value, it will be `null`.
   #[inline(always)]
   pub fn to_null(mut self) -> Result<(), JsonError<'bytes, B, S>> {
+    if !matches!(self.kind()?, Type::Null) {
+      Err(JsonError::TypeError)?
+    }
+
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
     match single_step(&mut deserializer.bytes, &mut deserializer.stack)? {
       SingleStepResult::Unknown(SingleStepUnknownResult::Null) => Ok(()),
-      _ => Err(JsonError::TypeError),
+      _ => Err(JsonError::InternalError),
     }
   }
 }
