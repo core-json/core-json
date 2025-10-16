@@ -1,43 +1,43 @@
 use crate::*;
 
-/// Advance the bytes until there's a non-whitespace character.
+/// Advance the reader until there's a non-whitespace character.
 #[inline(always)]
-fn advance_whitespace<'bytes, B: BytesLike<'bytes>, S: Stack>(
-  bytes: &mut B,
-) -> Result<(), JsonError<'bytes, B, S>> {
+fn advance_whitespace<'read, R: Read<'read>, S: Stack>(
+  reader: &mut PeekableRead<'read, R>,
+) -> Result<(), JsonError<'read, R, S>> {
   loop {
-    let next = bytes.peek(0).map_err(JsonError::BytesError)?;
+    let next = reader.peek().map_err(JsonError::ReadError)?;
     // https://datatracker.ietf.org/doc/html/rfc8259#section-2 defines whitespace as follows
     if !matches!(next, b'\x20' | b'\x09' | b'\x0A' | b'\x0D') {
       break;
     }
-    bytes.read_byte().map_err(JsonError::BytesError)?;
+    reader.read_byte().map_err(JsonError::ReadError)?;
   }
   Ok(())
 }
 
 /// Advance past a colon.
-pub(super) fn advance_past_colon<'bytes, B: BytesLike<'bytes>, S: Stack>(
-  bytes: &mut B,
-) -> Result<(), JsonError<'bytes, B, S>> {
-  advance_whitespace(bytes)?;
-  match bytes.read_byte().map_err(JsonError::BytesError)? {
-    b':' => advance_whitespace(bytes)?,
+pub(super) fn advance_past_colon<'read, R: Read<'read>, S: Stack>(
+  reader: &mut PeekableRead<'read, R>,
+) -> Result<(), JsonError<'read, R, S>> {
+  advance_whitespace(reader)?;
+  match reader.read_byte().map_err(JsonError::ReadError)? {
+    b':' => advance_whitespace(reader)?,
     _ => Err(JsonError::InvalidKeyValueDelimiter)?,
   }
   Ok(())
 }
 
 /// Advance past a comma, or to the close of the structure.
-pub(super) fn advance_past_comma_or_to_close<'bytes, B: BytesLike<'bytes>, S: Stack>(
-  bytes: &mut B,
-) -> Result<(), JsonError<'bytes, B, S>> {
-  advance_whitespace(bytes)?;
-  match bytes.peek(0).map_err(JsonError::BytesError)? {
+pub(super) fn advance_past_comma_or_to_close<'read, R: Read<'read>, S: Stack>(
+  reader: &mut PeekableRead<'read, R>,
+) -> Result<(), JsonError<'read, R, S>> {
+  advance_whitespace(reader)?;
+  match reader.peek().map_err(JsonError::ReadError)? {
     b',' => {
-      bytes.read_byte().map_err(JsonError::BytesError)?;
-      advance_whitespace(bytes)?;
-      if matches!(bytes.peek(0).map_err(JsonError::BytesError)?, b']' | b'}') {
+      reader.read_byte().map_err(JsonError::ReadError)?;
+      advance_whitespace(reader)?;
+      if matches!(reader.peek().map_err(JsonError::ReadError)?, b']' | b'}') {
         Err(JsonError::TrailingComma)?;
       }
     }
@@ -91,15 +91,15 @@ pub(super) enum SingleStepResult {
 
 /// Step the deserializer forwards.
 ///
-/// This assumes there is no leading whitespace present in `bytes` and will advance past any
+/// This assumes there is no leading whitespace present in `reader` and will advance past any
 /// whitespace present before the next logical unit.
-fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-  bytes: &'parent mut B,
+fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
+  reader: &'parent mut PeekableRead<'read, R>,
   stack: &'parent mut S,
-) -> Result<SingleStepResult, JsonError<'bytes, B, S>> {
+) -> Result<SingleStepResult, JsonError<'read, R, S>> {
   match stack.peek().ok_or(JsonError::InternalError)? {
     State::Object => {
-      let next = bytes.read_byte().map_err(JsonError::BytesError)?;
+      let next = reader.read_byte().map_err(JsonError::ReadError)?;
 
       // Check if the object terminates
       if next == b'}' {
@@ -107,7 +107,7 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
 
         // If this isn't the outer object, advance past the comma after
         if stack.depth() != 0 {
-          advance_past_comma_or_to_close(bytes)?;
+          advance_past_comma_or_to_close(reader)?;
         }
 
         return Ok(SingleStepResult::Object(SingleStepObjectResult::Closed));
@@ -124,13 +124,13 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
     }
     State::Array => {
       // Check if the array terminates
-      if bytes.peek(0).map_err(JsonError::BytesError)? == b']' {
+      if reader.peek().map_err(JsonError::ReadError)? == b']' {
         stack.pop().ok_or(JsonError::InternalError)?;
-        bytes.read_byte().map_err(JsonError::BytesError)?;
+        reader.read_byte().map_err(JsonError::ReadError)?;
 
         // If this isn't the outer object, advance past the comma after
         if stack.depth() != 0 {
-          advance_past_comma_or_to_close(bytes)?;
+          advance_past_comma_or_to_close(reader)?;
         }
 
         return Ok(SingleStepResult::Array(SingleStepArrayResult::Closed));
@@ -143,36 +143,36 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
     State::Unknown => {
       stack.pop().ok_or(JsonError::InternalError)?;
 
-      let result = match kind(bytes)? {
+      let result = match kind(reader)? {
         // Handle if this opens an object
         Type::Object => {
-          bytes.read_byte().map_err(JsonError::BytesError)?;
-          advance_whitespace(bytes)?;
+          reader.read_byte().map_err(JsonError::ReadError)?;
+          advance_whitespace(reader)?;
           stack.push(State::Object).map_err(JsonError::StackError)?;
           return Ok(SingleStepResult::Unknown(SingleStepUnknownResult::ObjectOpened));
         }
         // Handle if this opens an array
         Type::Array => {
-          bytes.read_byte().map_err(JsonError::BytesError)?;
-          advance_whitespace(bytes)?;
+          reader.read_byte().map_err(JsonError::ReadError)?;
+          advance_whitespace(reader)?;
           stack.push(State::Array).map_err(JsonError::StackError)?;
           return Ok(SingleStepResult::Unknown(SingleStepUnknownResult::ArrayOpened));
         }
         // Handle if this opens an string
         Type::String => {
-          bytes.read_byte().map_err(JsonError::BytesError)?;
+          reader.read_byte().map_err(JsonError::ReadError)?;
           return Ok(SingleStepResult::Unknown(SingleStepUnknownResult::String));
         }
         Type::Number => {
-          SingleStepResult::Unknown(SingleStepUnknownResult::Number(number::to_number_str(bytes)?))
+          SingleStepResult::Unknown(SingleStepUnknownResult::Number(number::to_number_str(reader)?))
         }
         Type::Bool => {
           let mut bool_string = [0; 5];
-          bytes.read_into_slice(&mut bool_string[.. 4]).map_err(JsonError::BytesError)?;
+          reader.read_into_slice(&mut bool_string[.. 4]).map_err(JsonError::ReadError)?;
           let bool = if &bool_string[.. 4] == b"true" {
             true
           } else {
-            bytes.read_into_slice(&mut bool_string[4 ..]).map_err(JsonError::BytesError)?;
+            reader.read_into_slice(&mut bool_string[4 ..]).map_err(JsonError::ReadError)?;
             if bool_string != *b"false" {
               Err(JsonError::TypeError)?;
             }
@@ -182,7 +182,7 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
         }
         Type::Null => {
           let mut null_string = [0; 4];
-          bytes.read_into_slice(&mut null_string).map_err(JsonError::BytesError)?;
+          reader.read_into_slice(&mut null_string).map_err(JsonError::ReadError)?;
           if null_string != *b"null" {
             Err(JsonError::TypeError)?;
           }
@@ -191,7 +191,7 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
       };
 
       // We now have to read past the next comma, or to the next closing of a structure
-      advance_past_comma_or_to_close(bytes)?;
+      advance_past_comma_or_to_close(reader)?;
 
       Ok(result)
     }
@@ -199,23 +199,23 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
 }
 
 /// A deserializer for a JSON-encoded structure.
-pub struct Deserializer<'bytes, B: BytesLike<'bytes>, S: Stack> {
-  pub(crate) bytes: B,
+pub struct Deserializer<'read, R: Read<'read>, S: Stack> {
+  pub(crate) reader: PeekableRead<'read, R>,
   stack: S,
   /*
     We advance the deserializer within `Drop` which cannot return an error. If an error is raised
     within drop, we store it here to be consumed upon the next call to a method which can return an
     error (if one is ever called).
   */
-  pub(crate) error: Option<JsonError<'bytes, B, S>>,
+  pub(crate) error: Option<JsonError<'read, R, S>>,
 }
 
-impl<'bytes, B: BytesLike<'bytes>, S: Stack> Deserializer<'bytes, B, S> {
-  pub(super) fn single_step(&mut self) -> Result<SingleStepResult, JsonError<'bytes, B, S>> {
+impl<'read, R: Read<'read>, S: Stack> Deserializer<'read, R, S> {
+  pub(super) fn single_step(&mut self) -> Result<SingleStepResult, JsonError<'read, R, S>> {
     if let Some(e) = self.error {
       Err(e)?;
     }
-    let res = single_step(&mut self.bytes, &mut self.stack);
+    let res = single_step(&mut self.reader, &mut self.stack);
     if let Some(e) = res.as_ref().err() {
       self.error = Some(*e);
     }
@@ -225,11 +225,11 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Deserializer<'bytes, B, S> {
 
 /// A JSON value.
 // Internally, we assume whenever this is held, the top item on the stack is `State::Unknown`
-pub struct Value<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> {
-  pub(crate) deserializer: Option<&'parent mut Deserializer<'bytes, B, S>>,
+pub struct Value<'read, 'parent, R: Read<'read>, S: Stack> {
+  pub(crate) deserializer: Option<&'parent mut Deserializer<'read, R, S>>,
 }
 
-impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop for Value<'bytes, 'parent, B, S> {
+impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for Value<'read, 'parent, R, S> {
   fn drop(&mut self) {
     /*
       When this value is dropped, we advance the deserializer past it if it hasn't already been
@@ -295,15 +295,20 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop for Value<'bytes, 'pa
   }
 }
 
-impl<'bytes, B: BytesLike<'bytes>, S: Stack> Deserializer<'bytes, B, S> {
+impl<'read, R: Read<'read>, S: Stack> Deserializer<'read, R, S> {
   /// Create a new deserializer.
-  pub fn new(mut bytes: B) -> Result<Self, JsonError<'bytes, B, S>> {
-    advance_whitespace(&mut bytes)?;
+  ///
+  /// If `reader` is aligned to valid JSON, this will read past the immediately present structure
+  /// yet no further. If `reader` is not aligned to valid JSON, the state of `reader` is undefined
+  /// after this.
+  pub fn new(reader: R) -> Result<Self, JsonError<'read, R, S>> {
+    let mut reader = PeekableRead::from(reader);
+    advance_whitespace(&mut reader)?;
 
     let mut stack = S::empty();
     stack.push(State::Unknown).map_err(JsonError::StackError)?;
 
-    Ok(Deserializer { bytes, stack, error: None })
+    Ok(Deserializer { reader, stack, error: None })
   }
 
   /// Obtain the `Value` representing the serialized structure.
@@ -313,11 +318,11 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Deserializer<'bytes, B, S> {
   /// the initial mutable borrow is dropped. Multiple calls to this function will cause an error to
   /// be returned.
   #[inline(always)]
-  pub fn value(&mut self) -> Result<Value<'bytes, '_, B, S>, JsonError<'bytes, B, S>> {
+  pub fn value(&mut self) -> Result<Value<'read, '_, R, S>, JsonError<'read, R, S>> {
     if (self.stack.depth() != 1) || self.error.is_some() {
       Err(JsonError::ReusedDeserializer)?;
     }
-    let result = Value { deserializer: Some(self) };
+    let mut result = Value { deserializer: Some(self) };
     if !matches!(result.kind()?, Type::Object | Type::Array) {
       Err(JsonError::TypeError)?;
     }

@@ -24,7 +24,7 @@ structures, is offered by
 
 ### `embedded-io` Support
 
-While `core-json` uses its own `BytesLike` trait to represent serializations,
+While `core-json` uses its own `Read` trait to represent serializations,
 [`embedded-io`](https://docs.rs/embedded-io) can be used via
 [`core-json-embedded-io`](https://docs.rs/core-json-embedded-io).
 
@@ -83,9 +83,9 @@ deserializing, which can make it a bit annoying to directly work with. The
 derivation of deserializing into typed objects however.
 
 Due to being no-`std`, we are unable to use `std::io::Read` and instead define
-our own trait, `BytesLike`. While we implement this for `&[u8]`, it should be
-possible to implement for `bytes::Buf` (and similar constructions) without
-issue.
+our own trait, `Read`. While we implement this for `&[u8]`, it should be
+possible to implement for `bytes::Buf`, `impl std::io::Read` (and similar
+constructions) without issue.
 
 ### Comparisons to Other Crates
 

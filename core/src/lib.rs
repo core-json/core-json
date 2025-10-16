@@ -12,7 +12,8 @@ mod string;
 mod number;
 mod deserializer;
 
-pub use io::BytesLike;
+pub use io::Read;
+use io::PeekableRead;
 pub use stack::*;
 use string::*;
 pub use number::{NumberSink, Number};
@@ -21,11 +22,11 @@ use deserializer::*;
 
 /// An error incurred when deserializing.
 #[derive(Debug)]
-pub enum JsonError<'bytes, B: BytesLike<'bytes>, S: Stack> {
+pub enum JsonError<'read, R: Read<'read>, S: Stack> {
   /// An unexpected state was reached during deserialization.
   InternalError,
-  /// An error from the bytes.
-  BytesError(B::Error),
+  /// An error from the reader.
+  ReadError(R::Error),
   /// An error from the stack.
   StackError(S::Error),
   /// The deserializer was reused.
@@ -45,13 +46,13 @@ pub enum JsonError<'bytes, B: BytesLike<'bytes>, S: Stack> {
   /// Operation could not be performed given the value's type.
   TypeError,
 }
-impl<'bytes, B: BytesLike<'bytes>, S: Stack> Clone for JsonError<'bytes, B, S> {
+impl<'read, R: Read<'read>, S: Stack> Clone for JsonError<'read, R, S> {
   #[inline(always)]
   fn clone(&self) -> Self {
     *self
   }
 }
-impl<'bytes, B: BytesLike<'bytes>, S: Stack> Copy for JsonError<'bytes, B, S> {}
+impl<'read, R: Read<'read>, S: Stack> Copy for JsonError<'read, R, S> {}
 
 /// The type of the value.
 ///
@@ -76,10 +77,10 @@ pub enum Type {
 /// This does not assert it's a valid instance of this class of items. It solely asserts if this
 /// is a valid item, it will be of this type.
 #[inline(always)]
-fn kind<'bytes, B: BytesLike<'bytes>, S: Stack>(
-  bytes: &B,
-) -> Result<Type, JsonError<'bytes, B, S>> {
-  Ok(match bytes.peek(0).map_err(JsonError::BytesError)? {
+fn kind<'read, R: Read<'read>, S: Stack>(
+  reader: &mut PeekableRead<'read, R>,
+) -> Result<Type, JsonError<'read, R, S>> {
+  Ok(match reader.peek().map_err(JsonError::ReadError)? {
     b'{' => Type::Object,
     b'[' => Type::Array,
     b'"' => Type::String,
@@ -90,8 +91,8 @@ fn kind<'bytes, B: BytesLike<'bytes>, S: Stack>(
 }
 
 /// A field within an object.
-pub struct Field<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> {
-  key: StringKey<'bytes, 'parent, B, S>,
+pub struct Field<'read, 'parent, R: Read<'read>, S: Stack> {
+  key: StringKey<'read, 'parent, R, S>,
 }
 
 /// Handle a field.
@@ -101,9 +102,9 @@ pub struct Field<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> {
 /// ideally would be yielded within `SingleStepObjectResult::Field`, yet that would cause every
 /// `SingleStepObjectResult` to consume the parent's borrow for the rest of its lifetime, when we
 /// only want to consume it upon `SingleStepObjectResult::Field`.
-fn handle_field<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-  deserializer: &'parent mut Deserializer<'bytes, B, S>,
-) -> Field<'bytes, 'parent, B, S> {
+fn handle_field<'read, 'parent, R: Read<'read>, S: Stack>(
+  deserializer: &'parent mut Deserializer<'read, R, S>,
+) -> Field<'read, 'parent, R, S> {
   Field { key: StringKey(Some(String::read(deserializer))) }
 }
 
@@ -114,14 +115,13 @@ fn handle_field<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
 /// ideally would be yielded within `SingleStepUnknownResult::String`, yet that would cause every
 /// `SingleStepUnknownResult` to consume the parent's borrow for the rest of its lifetime, when we
 /// only want to consume it upon `SingleStepUnknownResult::String`.
-fn handle_string_value<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-  deserializer: &'parent mut Deserializer<'bytes, B, S>,
-) -> StringValue<'bytes, 'parent, B, S> {
+fn handle_string_value<'read, 'parent, R: Read<'read>, S: Stack>(
+  deserializer: &'parent mut Deserializer<'read, R, S>,
+) -> StringValue<'read, 'parent, R, S> {
   StringValue(String::read(deserializer))
 }
 
-#[rustfmt::skip]
-impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Field<'bytes, 'parent, B, S> {
+impl<'read, 'parent, R: Read<'read>, S: Stack> Field<'read, 'parent, R, S> {
   /// Access the iterator for the string used as the field's key.
   ///
   /// The iterator will yield the individual characters within the string represented by the JSON
@@ -136,18 +136,18 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Field<'bytes, 'parent, B, 
   #[inline(always)]
   pub fn key(
     &mut self,
-  ) -> &mut (impl use<'bytes, 'parent, B, S> + Iterator<Item = Result<char, JsonError<'bytes, B, S>>>)
+  ) -> &mut (impl use<'read, 'parent, R, S> + Iterator<Item = Result<char, JsonError<'read, R, S>>>)
   {
     &mut self.key
   }
   /// Access the field's value.
   #[inline(always)]
-  pub fn value(mut self) -> Value<'bytes, 'parent, B, S> {
+  pub fn value(mut self) -> Value<'read, 'parent, R, S> {
     Value { deserializer: self.key.drop() }
   }
 }
 
-impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop for Field<'bytes, 'parent, B, S> {
+impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for Field<'read, 'parent, R, S> {
   #[inline(always)]
   fn drop(&mut self) {
     drop(Value { deserializer: self.key.drop() });
@@ -155,15 +155,13 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop for Field<'bytes, 'pa
 }
 
 /// An iterator over fields.
-pub struct FieldIterator<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> {
-  deserializer: &'parent mut Deserializer<'bytes, B, S>,
+pub struct FieldIterator<'read, 'parent, R: Read<'read>, S: Stack> {
+  deserializer: &'parent mut Deserializer<'read, R, S>,
   done: bool,
 }
 
 // When this object is dropped, advance the decoder past the unread items
-impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop
-  for FieldIterator<'bytes, 'parent, B, S>
-{
+impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for FieldIterator<'read, 'parent, R, S> {
   #[inline(always)]
   fn drop(&mut self) {
     if self.deserializer.error.is_some() {
@@ -184,7 +182,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop
   }
 }
 
-impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> FieldIterator<'bytes, 'parent, B, S> {
+impl<'read, 'parent, R: Read<'read>, S: Stack> FieldIterator<'read, 'parent, R, S> {
   /// The next field within the object.
   ///
   /// This is approximate to `Iterator::next` yet each item maintains a mutable reference to the
@@ -197,7 +195,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> FieldIterator<'bytes, 'par
   /// itself as a complete solution. Please refer to it if you have difficulties calling this
   /// method for context.
   #[allow(clippy::type_complexity, clippy::should_implement_trait)]
-  pub fn next(&mut self) -> Option<Result<Field<'bytes, '_, B, S>, JsonError<'bytes, B, S>>> {
+  pub fn next(&mut self) -> Option<Result<Field<'read, '_, R, S>, JsonError<'read, R, S>>> {
     if let Some(err) = self.deserializer.error {
       return Some(Err(err));
     }
@@ -224,15 +222,13 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> FieldIterator<'bytes, 'par
 }
 
 /// An iterator over an array.
-pub struct ArrayIterator<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> {
-  deserializer: &'parent mut Deserializer<'bytes, B, S>,
+pub struct ArrayIterator<'read, 'parent, R: Read<'read>, S: Stack> {
+  deserializer: &'parent mut Deserializer<'read, R, S>,
   done: bool,
 }
 
 // When this array is dropped, advance the decoder past the unread items
-impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop
-  for ArrayIterator<'bytes, 'parent, B, S>
-{
+impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for ArrayIterator<'read, 'parent, R, S> {
   #[inline(always)]
   fn drop(&mut self) {
     if self.deserializer.error.is_some() {
@@ -253,7 +249,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop
   }
 }
 
-impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> ArrayIterator<'bytes, 'parent, B, S> {
+impl<'read, 'parent, R: Read<'read>, S: Stack> ArrayIterator<'read, 'parent, R, S> {
   /// The next item within the array.
   ///
   /// This is approximate to `Iterator::next` yet each item maintains a mutable reference to the
@@ -266,7 +262,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> ArrayIterator<'bytes, 'par
   /// itself as a complete solution. Please refer to it if you have difficulties calling this
   /// method for context.
   #[allow(clippy::should_implement_trait)]
-  pub fn next(&mut self) -> Option<Result<Value<'bytes, '_, B, S>, JsonError<'bytes, B, S>>> {
+  pub fn next(&mut self) -> Option<Result<Value<'read, '_, R, S>, JsonError<'read, R, S>>> {
     if let Some(err) = self.deserializer.error {
       return Some(Err(err));
     }
@@ -294,20 +290,20 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> ArrayIterator<'bytes, 'par
   }
 }
 
-impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, S> {
+impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
   /// Get the type of the current item.
   ///
   /// This does not assert it's a valid instance of this class of items. It solely asserts if this
   /// is a valid item, it will be of this type.
   #[inline(always)]
-  pub fn kind(&self) -> Result<Type, JsonError<'bytes, B, S>> {
-    kind(&self.deserializer.as_ref().ok_or(JsonError::InternalError)?.bytes)
+  pub fn kind(&mut self) -> Result<Type, JsonError<'read, R, S>> {
+    kind(&mut self.deserializer.as_mut().ok_or(JsonError::InternalError)?.reader)
   }
 
   /// Iterate over the fields within this object.
   ///
   /// If a field is present multiple times, this will yield each instance.
-  pub fn fields(mut self) -> Result<FieldIterator<'bytes, 'parent, B, S>, JsonError<'bytes, B, S>> {
+  pub fn fields(mut self) -> Result<FieldIterator<'read, 'parent, R, S>, JsonError<'read, R, S>> {
     if !matches!(self.kind()?, Type::Object) {
       Err(JsonError::TypeError)?
     }
@@ -326,9 +322,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
   }
 
   /// Iterate over all items within this container.
-  pub fn iterate(
-    mut self,
-  ) -> Result<ArrayIterator<'bytes, 'parent, B, S>, JsonError<'bytes, B, S>> {
+  pub fn iterate(mut self) -> Result<ArrayIterator<'read, 'parent, R, S>, JsonError<'read, R, S>> {
     if !matches!(self.kind()?, Type::Array) {
       Err(JsonError::TypeError)?
     }
@@ -361,8 +355,8 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
   pub fn to_str(
     mut self,
   ) -> Result<
-    impl use<'bytes, 'parent, B, S> + Iterator<Item = Result<char, JsonError<'bytes, B, S>>>,
-    JsonError<'bytes, B, S>,
+    impl use<'read, 'parent, R, S> + Iterator<Item = Result<char, JsonError<'read, R, S>>>,
+    JsonError<'read, R, S>,
   > {
     if !matches!(self.kind()?, Type::String) {
       Err(JsonError::TypeError)?
@@ -379,7 +373,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
 
   /// Get the current item as a number.
   #[inline(always)]
-  pub fn to_number(mut self) -> Result<Number, JsonError<'bytes, B, S>> {
+  pub fn to_number(mut self) -> Result<Number, JsonError<'read, R, S>> {
     if !matches!(self.kind()?, Type::Number) {
       Err(JsonError::TypeError)?
     }
@@ -393,7 +387,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
 
   /// Get the current item as a `bool`.
   #[inline(always)]
-  pub fn to_bool(mut self) -> Result<bool, JsonError<'bytes, B, S>> {
+  pub fn to_bool(mut self) -> Result<bool, JsonError<'read, R, S>> {
     if !matches!(self.kind()?, Type::Bool) {
       Err(JsonError::TypeError)?
     }
@@ -410,7 +404,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
   /// The point of this method is to assert the value is `null` _and valid_. `kind` only tells the
   /// caller if it's a valid value, it will be `null`.
   #[inline(always)]
-  pub fn to_null(mut self) -> Result<(), JsonError<'bytes, B, S>> {
+  pub fn to_null(mut self) -> Result<(), JsonError<'read, R, S>> {
     if !matches!(self.kind()?, Type::Null) {
       Err(JsonError::TypeError)?
     }

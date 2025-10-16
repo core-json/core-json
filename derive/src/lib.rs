@@ -253,13 +253,13 @@ pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
     impl{generic_bounds} core_json_traits::JsonDeserialize for {name}{generics}
       where Self: core::default::Default {{
       fn deserialize<
-        'bytes,
+        'read,
         'parent,
-        B: core_json_traits::BytesLike<'bytes>,
+        B: core_json_traits::Read<'read>,
         S: core_json_traits::Stack,
       >(
-        value: core_json_traits::Value<'bytes, 'parent, B, S>,
-      ) -> Result<Self, core_json_traits::JsonError<'bytes, B, S>> {{
+        value: core_json_traits::Value<'read, 'parent, B, S>,
+      ) -> Result<Self, core_json_traits::JsonError<'read, B, S>> {{
         use core::default::Default;
 
         let mut result = Self::default();

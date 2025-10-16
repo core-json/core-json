@@ -1,10 +1,10 @@
 use core::num::FpCategory;
-use crate::{BytesLike, Stack, JsonError, Value, JsonDeserialize, JsonSerialize};
+use crate::{Read, Stack, JsonError, Value, JsonDeserialize, JsonSerialize};
 
 impl JsonDeserialize for f64 {
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>> {
     value.to_number()?.f64().ok_or(JsonError::TypeError)
   }
 }
@@ -36,9 +36,9 @@ impl From<JsonF64> for f64 {
 }
 
 impl JsonDeserialize for JsonF64 {
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>> {
     JsonF64::try_from(f64::deserialize(value)?).map_err(|_| JsonError::TypeError)
   }
 }

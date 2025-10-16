@@ -1,9 +1,9 @@
-use crate::{BytesLike, Stack, JsonError, Value, JsonDeserialize, JsonSerialize};
+use crate::{Read, Stack, JsonError, Value, JsonDeserialize, JsonSerialize};
 
 impl JsonDeserialize for i8 {
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>> {
     value
       .to_number()?
       .i64()
@@ -13,9 +13,9 @@ impl JsonDeserialize for i8 {
   }
 }
 impl JsonDeserialize for i16 {
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>> {
     value
       .to_number()?
       .i64()
@@ -25,9 +25,9 @@ impl JsonDeserialize for i16 {
   }
 }
 impl JsonDeserialize for i32 {
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>> {
     value
       .to_number()?
       .i64()
@@ -37,17 +37,17 @@ impl JsonDeserialize for i32 {
   }
 }
 impl JsonDeserialize for i64 {
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>> {
     value.to_number()?.i64().ok_or(JsonError::TypeError)
   }
 }
 
 impl JsonDeserialize for u8 {
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>> {
     value
       .to_number()?
       .i64()
@@ -57,9 +57,9 @@ impl JsonDeserialize for u8 {
   }
 }
 impl JsonDeserialize for u16 {
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>> {
     value
       .to_number()?
       .i64()
@@ -69,9 +69,9 @@ impl JsonDeserialize for u16 {
   }
 }
 impl JsonDeserialize for u32 {
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>> {
     value
       .to_number()?
       .i64()
@@ -81,9 +81,9 @@ impl JsonDeserialize for u32 {
   }
 }
 impl JsonDeserialize for u64 {
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>> {
     value
       .to_number()?
       .i64()
@@ -94,18 +94,18 @@ impl JsonDeserialize for u64 {
 }
 
 impl JsonDeserialize for bool {
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>> {
     value.to_bool()
   }
 }
 
 /// Deserialize `null` as `()`.
 impl JsonDeserialize for () {
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>> {
     value.to_null()
   }
 }

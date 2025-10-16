@@ -1,6 +1,6 @@
 use core::{str::FromStr, fmt::Write};
 
-use crate::{BytesLike, Stack, JsonError};
+use crate::{Read, PeekableRead, Stack, JsonError};
 
 /// An implementor of `core::fmt::Write` which writes to a slice.
 struct SliceWrite<'a>(&'a mut [u8], usize);
@@ -430,22 +430,22 @@ impl Write for NumberSink {
   }
 }
 
-/// Handle the immediate value within the bytes is a number.
+/// Handle the immediate value within the reader as a number.
 #[inline(always)]
-pub(crate) fn to_number_str<'bytes, B: BytesLike<'bytes>, S: Stack>(
-  bytes: &mut B,
-) -> Result<Number, JsonError<'bytes, B, S>> {
+pub(crate) fn to_number_str<'read, R: Read<'read>, S: Stack>(
+  reader: &mut PeekableRead<'read, R>,
+) -> Result<Number, JsonError<'read, R, S>> {
   let mut result = NumberSink::new();
 
   // Read until a byte which isn't part of the number, sinking along the way
   loop {
-    let char = bytes.peek(0).map_err(|e| JsonError::BytesError(e))?;
+    let char = reader.peek().map_err(|e| JsonError::ReadError(e))?;
     // separator, array closure, object closure, whitespace
     // https://datatracker.ietf.org/doc/html/rfc8259#section-2
     if matches!(char, b',' | b']' | b'}' | b'\x20' | b'\x09' | b'\x0A' | b'\x0D') {
       break;
     }
-    let char = bytes.read_byte().map_err(|e| JsonError::BytesError(e))?;
+    let char = reader.read_byte().map_err(|e| JsonError::ReadError(e))?;
     // Do apply the RFC-8259 validation rules
     result.push_byte(true, char);
   }

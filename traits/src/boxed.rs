@@ -1,11 +1,11 @@
 use alloc::boxed::Box;
 
-use crate::{BytesLike, Stack, JsonError, Value, JsonDeserialize, JsonStructure};
+use crate::{Read, Stack, JsonError, Value, JsonDeserialize, JsonStructure};
 
 impl<T: JsonDeserialize> JsonDeserialize for Box<T> {
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>> {
     T::deserialize(value).map(Box::new)
   }
 }

@@ -1,24 +1,62 @@
-//! IO primitives around bytes.
+use core::{marker::PhantomData, fmt::Debug};
 
-use core::fmt::Debug;
-
-/// An item which is like a `&[u8]`.
+/// A no-`std` `io::Read` alternative.
 ///
-/// This should be a reference to a buffer for which references are cheap to work with.
+/// While plenty of crates define their own, we avoid external dependencies by once again defining
+/// our own. For those who wish to use [`embedded-io`](https://docs.rs/embedded-io), please see
+/// [`core-json-embedded-io`](https://docs.rs/core-json-embedded-io).
 #[allow(clippy::len_without_is_empty)]
-pub trait BytesLike<'bytes>: Sized + Debug {
-  /// The type for errors when interacting with these bytes.
+pub trait Read<'read>: Sized + Debug {
+  /// The type for errors when interacting with this reader.
   type Error: Sized + Copy + Debug;
 
-  /// Peak at a byte.
-  fn peek(&self, i: usize) -> Result<u8, Self::Error>;
-
-  /// Read a fixed amount of bytes from the container into a slice.
+  /// Read a fixed amount of bytes from the reader into a slice.
   fn read_into_slice(&mut self, slice: &mut [u8]) -> Result<(), Self::Error>;
+}
 
-  /// Read a byte from the container.
+/// A wrapper for an `impl Read` with a one-byte buffer, enabling peeking.
+pub(crate) struct PeekableRead<'read, R: Read<'read>> {
+  buffer: Option<u8>,
+  reader: R,
+  _read: PhantomData<&'read ()>,
+}
+
+impl<'read, R: Read<'read>> From<R> for PeekableRead<'read, R> {
+  fn from(reader: R) -> Self {
+    Self { buffer: None, reader, _read: PhantomData }
+  }
+}
+
+impl<'read, R: Read<'read>> PeekableRead<'read, R> {
   #[inline(always)]
-  fn read_byte(&mut self) -> Result<u8, Self::Error> {
+  pub(crate) fn peek(&mut self) -> Result<u8, R::Error> {
+    Ok(match self.buffer {
+      Some(byte) => byte,
+      None => {
+        let mut buffer = [0u8; 1];
+        self.reader.read_into_slice(&mut buffer)?;
+        self.buffer = Some(buffer[0]);
+        buffer[0]
+      }
+    })
+  }
+
+  #[inline(always)]
+  pub(crate) fn read_into_slice(&mut self, slice: &mut [u8]) -> Result<(), R::Error> {
+    if slice.is_empty() {
+      return Ok(());
+    }
+    let i = if let Some(byte) = self.buffer.take() {
+      slice[0] = byte;
+      1
+    } else {
+      0
+    };
+    self.reader.read_into_slice(&mut slice[i ..])
+  }
+
+  #[inline(always)]
+  pub(crate) fn read_byte(&mut self) -> Result<u8, R::Error> {
     let mut buf = [0; 1];
     self.read_into_slice(&mut buf)?;
     Ok(buf[0])
@@ -33,13 +71,8 @@ pub enum SliceError {
   Short(usize),
 }
 
-impl<'bytes> BytesLike<'bytes> for &'bytes [u8] {
+impl<'read> Read<'read> for &'read [u8] {
   type Error = SliceError;
-
-  #[inline(always)]
-  fn peek(&self, i: usize) -> Result<u8, Self::Error> {
-    self.get(i).ok_or_else(|| SliceError::Short((i - self.len()).saturating_add(1))).copied()
-  }
 
   #[inline(always)]
   fn read_into_slice(&mut self, slice: &mut [u8]) -> Result<(), Self::Error> {
@@ -49,5 +82,14 @@ impl<'bytes> BytesLike<'bytes> for &'bytes [u8] {
     slice.copy_from_slice(&self[.. slice.len()]);
     *self = &self[slice.len() ..];
     Ok(())
+  }
+}
+
+impl<'read, R: Read<'read>> Read<'read> for &mut R {
+  type Error = R::Error;
+
+  #[inline(always)]
+  fn read_into_slice(&mut self, slice: &mut [u8]) -> Result<(), Self::Error> {
+    R::read_into_slice(self, slice)
   }
 }

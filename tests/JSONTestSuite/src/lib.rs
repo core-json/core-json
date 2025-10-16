@@ -26,7 +26,7 @@ mod tests {
       if matches!(name, "y_object_duplicated_key.json" | "y_object_duplicated_key_and_value.json") {
         let mut deserializer =
           core_json::Deserializer::<_, core_json::ConstStack<4>>::new(encoding.as_slice()).unwrap();
-        let value = deserializer.value().unwrap();
+        let mut value = deserializer.value().unwrap();
         let is_object = matches!(value.kind().unwrap(), core_json::Type::Object);
         let is_array = matches!(value.kind().unwrap(), core_json::Type::Array);
         if is_object {
@@ -90,7 +90,7 @@ mod tests {
       else {
         continue;
       };
-      let Ok(value) = deserializer.value() else { continue };
+      let Ok(mut value) = deserializer.value() else { continue };
       let Ok(is_object) = value.kind().map(|kind| matches!(kind, core_json::Type::Object)) else {
         continue;
       };

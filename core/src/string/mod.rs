@@ -1,4 +1,4 @@
-use crate::{BytesLike, Stack, Deserializer, JsonError};
+use crate::{Read, Stack, Deserializer, JsonError};
 
 mod unicode;
 mod hex;
@@ -12,8 +12,8 @@ use hex::*;
 ///
 /// This does not implement `Drop`. It is the caller's responsibility to exhaust this iterator to
 /// ensure the deserializer is advanced correctly.
-pub(crate) struct ValidateString<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> {
-  deserializer: &'parent mut Deserializer<'bytes, B, S>,
+pub(crate) struct ValidateString<'read, 'parent, R: Read<'read>, S: Stack> {
+  deserializer: &'parent mut Deserializer<'read, R, S>,
   done: bool,
 }
 
@@ -25,10 +25,8 @@ pub(crate) enum StringCharacter {
   EscapedUnicode([u8; 4]),
 }
 
-impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Iterator
-  for ValidateString<'bytes, 'parent, B, S>
-{
-  type Item = Result<StringCharacter, JsonError<'bytes, B, S>>;
+impl<'read, 'parent, R: Read<'read>, S: Stack> Iterator for ValidateString<'read, 'parent, R, S> {
+  type Item = Result<StringCharacter, JsonError<'read, R, S>>;
   #[inline(always)]
   fn next(&mut self) -> Option<Self::Item> {
     if let Some(e) = self.deserializer.error {
@@ -39,7 +37,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Iterator
     }
 
     let res = (|| {
-      let this = read_utf8(&mut self.deserializer.bytes)?;
+      let this = read_utf8(&mut self.deserializer.reader)?;
 
       // https://datatracker.ietf.org/doc/html/rfc8259#section-7
       Ok(match this {
@@ -51,7 +49,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Iterator
         '\\' => {
           // All characters which are valid to be escaped are ASCII, allowing us to use `read_byte`
           // here
-          let escaped = self.deserializer.bytes.read_byte().map_err(JsonError::BytesError)?;
+          let escaped = self.deserializer.reader.read_byte().map_err(JsonError::ReadError)?;
           match escaped {
             b'"' => Some(StringCharacter::Character('"')),
             b'\\' => Some(StringCharacter::Character('\\')),
@@ -65,7 +63,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Iterator
             b'\x75' => {
               // We use `read_into_slice`, not `read_utf8`, here as hex characters will be ASCII
               let mut bytes = [0; 4];
-              self.deserializer.bytes.read_into_slice(&mut bytes).map_err(JsonError::BytesError)?;
+              self.deserializer.reader.read_into_slice(&mut bytes).map_err(JsonError::ReadError)?;
               if !validate_hex(bytes) {
                 Err(JsonError::InvalidValue)?;
               }
@@ -91,29 +89,29 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Iterator
 }
 
 /// An iterator which yields the characters of a string represented within a JSON serialization.
-pub(crate) struct String<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> {
-  validation: ValidateString<'bytes, 'parent, B, S>,
+pub(crate) struct String<'read, 'parent, R: Read<'read>, S: Stack> {
+  validation: ValidateString<'read, 'parent, R, S>,
   errored: bool,
 }
 
-impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> String<'bytes, 'parent, B, S> {
+impl<'read, 'parent, R: Read<'read>, S: Stack> String<'read, 'parent, R, S> {
   /// Read a just-opened string from a JSON serialization.
   #[inline(always)]
-  pub(crate) fn read(deserializer: &'parent mut Deserializer<'bytes, B, S>) -> Self {
+  pub(crate) fn read(deserializer: &'parent mut Deserializer<'read, R, S>) -> Self {
     String { validation: ValidateString { deserializer, done: false }, errored: false }
   }
 
   #[inline(always)]
-  fn drop(&mut self) -> &mut &'parent mut Deserializer<'bytes, B, S> {
+  fn drop(&mut self) -> &mut &'parent mut Deserializer<'read, R, S> {
     while let Some(Ok(_)) = self.validation.next() {}
     &mut self.validation.deserializer
   }
 }
 
-fn handle_escaped_unicode<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
+fn handle_escaped_unicode<'read, 'parent, R: Read<'read>, S: Stack>(
   hex: [u8; 4],
-  validation: &mut ValidateString<'bytes, 'parent, B, S>,
-) -> Result<char, JsonError<'bytes, B, S>> {
+  validation: &mut ValidateString<'read, 'parent, R, S>,
+) -> Result<char, JsonError<'read, R, S>> {
   let next = read_hex(hex)?;
 
   /*
@@ -160,8 +158,8 @@ fn handle_escaped_unicode<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
   char::from_u32(codepoint).ok_or(JsonError::NotUtf8)
 }
 
-impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Iterator for String<'bytes, 'parent, B, S> {
-  type Item = Result<char, JsonError<'bytes, B, S>>;
+impl<'read, 'parent, R: Read<'read>, S: Stack> Iterator for String<'read, 'parent, R, S> {
+  type Item = Result<char, JsonError<'read, R, S>>;
   #[inline(always)]
   fn next(&mut self) -> Option<Self::Item> {
     if self.errored {
@@ -185,17 +183,17 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Iterator for String<'bytes
 /// A wrapper for a `String` which is a key.
 ///
 /// When dropped, this additionally reads past the colon separating the key from the value.
-pub(crate) struct StringKey<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-  pub(crate) Option<String<'bytes, 'parent, B, S>>,
+pub(crate) struct StringKey<'read, 'parent, R: Read<'read>, S: Stack>(
+  pub(crate) Option<String<'read, 'parent, R, S>>,
 );
-impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> StringKey<'bytes, 'parent, B, S> {
+impl<'read, 'parent, R: Read<'read>, S: Stack> StringKey<'read, 'parent, R, S> {
   #[inline(always)]
-  pub(super) fn drop(&mut self) -> Option<&'parent mut Deserializer<'bytes, B, S>> {
+  pub(super) fn drop(&mut self) -> Option<&'parent mut Deserializer<'read, R, S>> {
     let mut string = self.0.take()?;
     string.drop();
     let deserializer = string.validation.deserializer;
     if deserializer.error.is_none() {
-      match crate::advance_past_colon(&mut deserializer.bytes) {
+      match crate::advance_past_colon(&mut deserializer.reader) {
         Ok(()) => {}
         Err(e) => deserializer.error = Some(e),
       }
@@ -203,10 +201,8 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> StringKey<'bytes, 'parent,
     Some(deserializer)
   }
 }
-impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Iterator
-  for StringKey<'bytes, 'parent, B, S>
-{
-  type Item = Result<char, JsonError<'bytes, B, S>>;
+impl<'read, 'parent, R: Read<'read>, S: Stack> Iterator for StringKey<'read, 'parent, R, S> {
+  type Item = Result<char, JsonError<'read, R, S>>;
   #[inline(always)]
   fn next(&mut self) -> Option<Self::Item> {
     self.0.as_mut().and_then(String::next)
@@ -216,25 +212,23 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Iterator
 /// A wrapper for a `String` which is a value.
 ///
 /// When dropped, this additionally reads past a following comma or to the end of the container.
-pub(crate) struct StringValue<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-  pub(crate) String<'bytes, 'parent, B, S>,
+pub(crate) struct StringValue<'read, 'parent, R: Read<'read>, S: Stack>(
+  pub(crate) String<'read, 'parent, R, S>,
 );
-impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop for StringValue<'bytes, 'parent, B, S> {
+impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for StringValue<'read, 'parent, R, S> {
   #[inline(always)]
   fn drop(&mut self) {
     let deserializer = self.0.drop();
     if deserializer.error.is_none() {
-      match crate::advance_past_comma_or_to_close(&mut deserializer.bytes) {
+      match crate::advance_past_comma_or_to_close(&mut deserializer.reader) {
         Ok(()) => {}
         Err(e) => deserializer.error = Some(e),
       }
     }
   }
 }
-impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Iterator
-  for StringValue<'bytes, 'parent, B, S>
-{
-  type Item = Result<char, JsonError<'bytes, B, S>>;
+impl<'read, 'parent, R: Read<'read>, S: Stack> Iterator for StringValue<'read, 'parent, R, S> {
+  type Item = Result<char, JsonError<'read, R, S>>;
   #[inline(always)]
   fn next(&mut self) -> Option<Self::Item> {
     self.0.next()

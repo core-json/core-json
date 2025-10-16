@@ -1,12 +1,12 @@
 use crate::JsonSerialize;
 
 #[cfg(feature = "alloc")]
-use crate::{BytesLike, Stack, JsonError, Value, JsonDeserialize};
+use crate::{Read, Stack, JsonError, Value, JsonDeserialize};
 #[cfg(feature = "alloc")]
 impl JsonDeserialize for alloc::string::String {
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>> {
     value.to_str()?.collect()
   }
 }

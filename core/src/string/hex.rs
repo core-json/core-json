@@ -1,4 +1,4 @@
-use crate::{BytesLike, Stack, JsonError};
+use crate::{Read, Stack, JsonError};
 
 #[must_use]
 #[inline(always)]
@@ -82,13 +82,11 @@ pub(super) fn validate_hex(bytes: [u8; 4]) -> bool {
 
 /// Read a `u16` from its big-endian hexadecimal encoding.
 #[inline(always)]
-pub(super) fn read_hex<'bytes, B: BytesLike<'bytes>, S: Stack>(
+pub(super) fn read_hex<'read, R: Read<'read>, S: Stack>(
   hex: [u8; 4],
-) -> Result<u32, JsonError<'bytes, B, S>> {
+) -> Result<u32, JsonError<'read, R, S>> {
   #[inline(always)]
-  fn hex_char<'bytes, B: BytesLike<'bytes>, S: Stack>(
-    char: u8,
-  ) -> Result<u16, JsonError<'bytes, B, S>> {
+  fn hex_char<'read, R: Read<'read>, S: Stack>(char: u8) -> Result<u16, JsonError<'read, R, S>> {
     Ok(match char {
       b'0' => 0,
       b'1' => 1,

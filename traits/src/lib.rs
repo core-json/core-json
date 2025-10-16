@@ -25,9 +25,9 @@ pub use float::JsonF64;
 /// deserializing into types which allocate.
 pub trait JsonDeserialize: Sized {
   /// Decode this item from a `Value`.
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>>;
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>>;
 }
 
 /// A structure which can deserialized from a JSON serialization.
@@ -38,9 +38,9 @@ pub trait JsonStructure: JsonDeserialize {
   /// the length of input or deserialize into types which define bounds.
   ///
   /// This method SHOULD NOT be overriden.
-  fn deserialize_structure<'bytes, B: BytesLike<'bytes>, S: Stack>(
+  fn deserialize_structure<'read, B: Read<'read>, S: Stack>(
     json: B,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
+  ) -> Result<Self, JsonError<'read, B, S>> {
     let mut json = Deserializer::new(json)?;
     let value = json.value()?;
     Self::deserialize(value)

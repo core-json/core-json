@@ -1,12 +1,12 @@
 #[cfg(feature = "alloc")]
 use alloc::{vec, vec::Vec};
 
-use crate::{BytesLike, Stack, JsonError, Value, JsonDeserialize, JsonStructure, JsonSerialize};
+use crate::{Read, Stack, JsonError, Value, JsonDeserialize, JsonStructure, JsonSerialize};
 
 impl<T: 'static + Default + JsonDeserialize, const N: usize> JsonDeserialize for [T; N] {
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>> {
     let mut res: Self = core::array::from_fn(|_| Default::default());
     let mut iter = value.iterate()?;
     let mut i = 0;
@@ -27,9 +27,9 @@ impl<T: 'static + Default + JsonDeserialize, const N: usize> JsonStructure for [
 
 #[cfg(feature = "alloc")]
 impl<T: 'static + JsonDeserialize> JsonDeserialize for Vec<T> {
-  fn deserialize<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
-    value: Value<'bytes, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'bytes, B, S>> {
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>> {
     let mut res = vec![];
     let mut iter = value.iterate()?;
     while let Some(item) = iter.next() {

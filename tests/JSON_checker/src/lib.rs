@@ -53,7 +53,7 @@ mod tests {
       else {
         continue;
       };
-      let Ok(value) = deserializer.value() else { continue };
+      let Ok(mut value) = deserializer.value() else { continue };
       let Ok(is_object) = value.kind().map(|kind| matches!(kind, core_json::Type::Object)) else {
         continue;
       };

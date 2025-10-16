@@ -1,4 +1,4 @@
-use crate::{BytesLike, Stack, JsonError};
+use crate::{Read, PeekableRead, Stack, JsonError};
 
 /// Calculate the length of the non-ASCII UTF-8 codepoint from its first byte.
 ///
@@ -11,9 +11,9 @@ fn non_ascii_utf8_codepoint_len(b: u8) -> usize {
 
 /// Convert a UTF-8 codepoint to a `char`.
 #[inline(always)]
-fn utf8_codepoint_to_char<'bytes, B: BytesLike<'bytes>, S: Stack>(
+fn utf8_codepoint_to_char<'read, R: Read<'read>, S: Stack>(
   c: &[u8],
-) -> Result<char, JsonError<'bytes, B, S>> {
+) -> Result<char, JsonError<'read, R, S>> {
   // https://en.wikipedia.org/wiki/UTF-8#Description
   // The last six bits of every byte, except the first for which it depends on the length of the
   // entire codepoint
@@ -37,13 +37,13 @@ fn utf8_codepoint_to_char<'bytes, B: BytesLike<'bytes>, S: Stack>(
   .ok_or(JsonError::InvalidValue)
 }
 
-/// Read a UTF-8 character from a `BytesLike`.
+/// Read a UTF-8 character from a `Read`.
 #[inline(always)]
-pub(super) fn read_utf8<'bytes, B: BytesLike<'bytes>, S: Stack>(
-  bytes: &mut B,
-) -> Result<char, JsonError<'bytes, B, S>> {
+pub(super) fn read_utf8<'read, R: Read<'read>, S: Stack>(
+  reader: &mut PeekableRead<'read, R>,
+) -> Result<char, JsonError<'read, R, S>> {
   let mut utf8_codepoint = [0; 4];
-  utf8_codepoint[0] = bytes.read_byte().map_err(JsonError::BytesError)?;
+  utf8_codepoint[0] = reader.read_byte().map_err(JsonError::ReadError)?;
   // If this is ASCII, immediately return it.
   if (utf8_codepoint[0] >> 7) == 0 {
     return Ok(utf8_codepoint[0] as char);
@@ -51,7 +51,7 @@ pub(super) fn read_utf8<'bytes, B: BytesLike<'bytes>, S: Stack>(
   let utf8_codepoint_len = non_ascii_utf8_codepoint_len(utf8_codepoint[0]);
 
   let utf8_codepoint = &mut utf8_codepoint[.. utf8_codepoint_len];
-  bytes.read_into_slice(&mut utf8_codepoint[1 ..]).map_err(JsonError::BytesError)?;
+  reader.read_into_slice(&mut utf8_codepoint[1 ..]).map_err(JsonError::ReadError)?;
   utf8_codepoint_to_char(utf8_codepoint)
 }
 
