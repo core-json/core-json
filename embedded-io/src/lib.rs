@@ -73,20 +73,6 @@ impl<R: Clone + Read<Error: Copy>> BytesLike<'static> for ReadAdapter<R> {
     Ok(buf[0])
   }
 
-  fn read_bytes(&mut self, mut bytes: usize) -> Result<Self, Self::Error> {
-    let result = Self { reader: self.reader.clone(), bound: Some(bytes) };
-
-    // Skip ahead
-    let mut buf = [0; 8];
-    while bytes > 0 {
-      let this_iter = bytes.min(8);
-      self.reader.read_exact(&mut buf[.. this_iter]).map_err(Error::ReadExact)?;
-      bytes -= this_iter;
-    }
-
-    Ok(result)
-  }
-
   fn read_into_slice(&mut self, slice: &mut [u8]) -> Result<(), Self::Error> {
     if let Some(bound) = self.bound.as_mut() {
       *bound = bound.checked_sub(slice.len()).ok_or(Error::Bounded)?;
@@ -134,18 +120,6 @@ impl<R: Clone + Read<Error: Copy> + Seek> BytesLike<'static> for SeekAdapter<R> 
     reader.seek_relative((-i) - 1).map_err(Error::Reader)?;
 
     Ok(buf[0])
-  }
-
-  fn read_bytes(&mut self, bytes: usize) -> Result<Self, Self::Error> {
-    let result = Self { reader: RefCell::new(self.reader.borrow().clone()), bound: Some(bytes) };
-
-    self
-      .reader
-      .borrow_mut()
-      .seek_relative(i64::try_from(bytes).map_err(|_| Error::InternalError)?)
-      .map_err(Error::Reader)?;
-
-    Ok(result)
   }
 
   fn read_into_slice(&mut self, slice: &mut [u8]) -> Result<(), Self::Error> {
@@ -213,9 +187,9 @@ fn test_read() {
   let value = deserializer.value().unwrap();
   let mut fields = value.fields().unwrap();
   let field = fields.next().unwrap();
-  let (key, value) = field.unwrap();
-  assert_eq!(key.collect::<Result<String, _>>().unwrap(), "hello");
-  assert_eq!(value.to_str().unwrap().collect::<Result<String, _>>().unwrap(), "goodbye");
+  let mut field = field.unwrap();
+  assert_eq!(field.key().collect::<Result<String, _>>().unwrap(), "hello");
+  assert_eq!(field.value().to_str().unwrap().collect::<Result<String, _>>().unwrap(), "goodbye");
   assert!(fields.next().is_none());
 }
 
@@ -254,8 +228,8 @@ fn test_seek() {
   let value = deserializer.value().unwrap();
   let mut fields = value.fields().unwrap();
   let field = fields.next().unwrap();
-  let (key, value) = field.unwrap();
-  assert_eq!(key.collect::<Result<String, _>>().unwrap(), "hello");
-  assert_eq!(value.to_str().unwrap().collect::<Result<String, _>>().unwrap(), "goodbye");
+  let mut field = field.unwrap();
+  assert_eq!(field.key().collect::<Result<String, _>>().unwrap(), "hello");
+  assert_eq!(field.value().to_str().unwrap().collect::<Result<String, _>>().unwrap(), "goodbye");
   assert!(fields.next().is_none());
 }

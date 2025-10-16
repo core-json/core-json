@@ -13,16 +13,7 @@ pub trait BytesLike<'bytes>: Sized + Debug {
   /// Peak at a byte.
   fn peek(&self, i: usize) -> Result<u8, Self::Error>;
 
-  /// Read a fixed amount of bytes from the container.
-  ///
-  /// This MUST return `Ok(slice)` where `slice` has the expected length or `Err(_)`.
-  fn read_bytes(&mut self, bytes: usize) -> Result<Self, Self::Error>;
-
   /// Read a fixed amount of bytes from the container into a slice.
-  /*
-    We _could_ provide this method around `read_bytes` but it'd be a very inefficient
-    default implementation. It's best to require callers provide the implementation.
-  */
   fn read_into_slice(&mut self, slice: &mut [u8]) -> Result<(), Self::Error>;
 
   /// Read a byte from the container.
@@ -36,7 +27,10 @@ pub trait BytesLike<'bytes>: Sized + Debug {
   /// Advance the container by a certain amount of bytes.
   #[inline(always)]
   fn advance(&mut self, bytes: usize) -> Result<(), Self::Error> {
-    self.read_bytes(bytes).map(|_| ())
+    for _ in 0 .. bytes {
+      self.read_byte()?;
+    }
+    Ok(())
   }
 }
 
@@ -57,18 +51,12 @@ impl<'bytes> BytesLike<'bytes> for &'bytes [u8] {
   }
 
   #[inline(always)]
-  fn read_bytes(&mut self, bytes: usize) -> Result<Self, Self::Error> {
-    if self.len() < bytes {
-      Err(SliceError::Short(bytes))?;
-    }
-    let res = &self[.. bytes];
-    *self = &self[bytes ..];
-    Ok(res)
-  }
-
-  #[inline(always)]
   fn read_into_slice(&mut self, slice: &mut [u8]) -> Result<(), Self::Error> {
-    slice.copy_from_slice(self.read_bytes(slice.len())?);
+    if self.len() < slice.len() {
+      Err(SliceError::Short(slice.len()))?;
+    }
+    slice.copy_from_slice(&self[.. slice.len()]);
+    *self = &self[slice.len() ..];
     Ok(())
   }
 }

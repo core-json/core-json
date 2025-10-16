@@ -32,9 +32,9 @@ fn descend<
     PathElement::Field(field) => {
       let mut iterator = value.fields().unwrap();
       loop {
-        let (found_field, value) = iterator.next().unwrap().unwrap();
-        if field == &found_field.collect::<Result<String, _>>().unwrap() {
-          descend(value, &path[1 ..], callback);
+        let mut found_field = iterator.next().unwrap().unwrap();
+        if field == &found_field.key().collect::<Result<String, _>>().unwrap() {
+          descend(found_field.value(), &path[1 ..], callback);
           return;
         }
       }

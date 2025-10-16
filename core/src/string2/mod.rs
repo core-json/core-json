@@ -182,8 +182,40 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Iterator for String<'bytes
   }
 }
 
-/// A wrapper for a `String` which additionally reads past a following comma or to the end of the
-/// container.
+/// A wrapper for a `String` which is a key.
+///
+/// When dropped, this additionally reads past the colon separating the key from the value.
+pub(crate) struct StringKey<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
+  pub(crate) Option<String<'bytes, 'parent, B, S>>,
+);
+impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> StringKey<'bytes, 'parent, B, S> {
+  #[inline(always)]
+  pub(super) fn drop(&mut self) -> Option<&'parent mut Deserializer<'bytes, B, S>> {
+    let mut string = self.0.take()?;
+    string.drop();
+    let deserializer = string.validation.deserializer;
+    if deserializer.error.is_none() {
+      match crate::advance_past_colon(&mut deserializer.bytes) {
+        Ok(()) => {}
+        Err(e) => deserializer.error = Some(e),
+      }
+    }
+    Some(deserializer)
+  }
+}
+impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Iterator
+  for StringKey<'bytes, 'parent, B, S>
+{
+  type Item = Result<char, JsonError<'bytes, B, S>>;
+  #[inline(always)]
+  fn next(&mut self) -> Option<Self::Item> {
+    self.0.as_mut().and_then(String::next)
+  }
+}
+
+/// A wrapper for a `String` which is a value.
+///
+/// When dropped, this additionally reads past a following comma or to the end of the container.
 pub(crate) struct StringValue<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
   pub(crate) String<'bytes, 'parent, B, S>,
 );

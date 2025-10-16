@@ -16,6 +16,18 @@ fn advance_whitespace<'bytes, B: BytesLike<'bytes>, S: Stack>(
   Ok(())
 }
 
+/// Advance past a colon.
+pub(super) fn advance_past_colon<'bytes, B: BytesLike<'bytes>, S: Stack>(
+  bytes: &mut B,
+) -> Result<(), JsonError<'bytes, B, S>> {
+  advance_whitespace(bytes)?;
+  match bytes.read_byte().map_err(JsonError::BytesError)? {
+    b':' => advance_whitespace(bytes)?,
+    _ => Err(JsonError::InvalidKeyValueDelimiter)?,
+  }
+  Ok(())
+}
+
 /// Advance past a comma, or to the close of the structure.
 pub(super) fn advance_past_comma_or_to_close<'bytes, B: BytesLike<'bytes>, S: Stack>(
   bytes: &mut B,
@@ -36,12 +48,9 @@ pub(super) fn advance_past_comma_or_to_close<'bytes, B: BytesLike<'bytes>, S: St
 }
 
 /// The result from a single step of the deserialized, if within an object.
-pub(super) enum SingleStepObjectResult<'bytes, B: BytesLike<'bytes>, S: Stack> {
+pub(super) enum SingleStepObjectResult {
   /// A field within the object was advanced to.
-  Field {
-    /// The key for this field.
-    key: String<'bytes, B, S>,
-  },
+  Field,
   /// The object was closed.
   Closed,
 }
@@ -71,9 +80,9 @@ pub(super) enum SingleStepUnknownResult {
 }
 
 /// The result from a single step of the deserializer.
-pub(super) enum SingleStepResult<'bytes, B: BytesLike<'bytes>, S: Stack> {
+pub(super) enum SingleStepResult {
   /// The result if within an object.
-  Object(SingleStepObjectResult<'bytes, B, S>),
+  Object(SingleStepObjectResult),
   /// The result if within an array.
   Array(SingleStepArrayResult),
   /// The result if handling an unknown value.
@@ -87,7 +96,7 @@ pub(super) enum SingleStepResult<'bytes, B: BytesLike<'bytes>, S: Stack> {
 fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
   bytes: &'parent mut B,
   stack: &'parent mut S,
-) -> Result<SingleStepResult<'bytes, B, S>, JsonError<'bytes, B, S>> {
+) -> Result<SingleStepResult, JsonError<'bytes, B, S>> {
   match stack.peek().ok_or(JsonError::InternalError)? {
     State::Object => {
       let next = bytes.read_byte().map_err(JsonError::BytesError)?;
@@ -108,18 +117,10 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
       if next != b'"' {
         Err(JsonError::InvalidKey)?;
       }
-      let key = read_string(bytes)?;
 
-      // Read the colon delimiter
-      advance_whitespace::<_, S>(bytes)?;
-      if bytes.read_byte().map_err(JsonError::BytesError)? != b':' {
-        Err(JsonError::InvalidKeyValueDelimiter)?;
-      }
-
-      // Push how we're reading a value of an unknown type onto the stack
-      advance_whitespace::<_, S>(bytes)?;
+      // Push how we're reading a value of an unknown type onto the stack, for the value
       stack.push(State::Unknown).map_err(JsonError::StackError)?;
-      Ok(SingleStepResult::Object(SingleStepObjectResult::Field { key }))
+      Ok(SingleStepResult::Object(SingleStepObjectResult::Field))
     }
     State::Array => {
       // Check if the array terminates
@@ -210,9 +211,7 @@ pub struct Deserializer<'bytes, B: BytesLike<'bytes>, S: Stack> {
 }
 
 impl<'bytes, B: BytesLike<'bytes>, S: Stack> Deserializer<'bytes, B, S> {
-  pub(super) fn single_step(
-    &mut self,
-  ) -> Result<SingleStepResult<'bytes, B, S>, JsonError<'bytes, B, S>> {
+  pub(super) fn single_step(&mut self) -> Result<SingleStepResult, JsonError<'bytes, B, S>> {
     if let Some(e) = self.error {
       Err(e)?;
     }
@@ -278,11 +277,14 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop for Value<'bytes, 'pa
       while depth != 0 {
         let Ok(step) = deserializer.single_step() else { return };
         match step {
-          SingleStepResult::Object(SingleStepObjectResult::Closed) |
-          SingleStepResult::Array(SingleStepArrayResult::Closed) => depth -= 1,
           SingleStepResult::Unknown(SingleStepUnknownResult::String) => {
             handle_string_value(deserializer);
           }
+          SingleStepResult::Object(SingleStepObjectResult::Field) => {
+            handle_field(deserializer);
+          }
+          SingleStepResult::Object(SingleStepObjectResult::Closed) |
+          SingleStepResult::Array(SingleStepArrayResult::Closed) => depth -= 1,
           SingleStepResult::Unknown(
             SingleStepUnknownResult::ObjectOpened | SingleStepUnknownResult::ArrayOpened,
           ) => depth += 1,

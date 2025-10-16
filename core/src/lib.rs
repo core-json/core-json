@@ -8,14 +8,13 @@ extern crate alloc;
 
 mod io;
 mod stack;
-mod string;
 mod string2;
 mod number;
 mod deserializer;
 
 pub use io::BytesLike;
 pub use stack::*;
-use string::*;
+use string2::*;
 pub use number::{NumberSink, Number};
 pub use deserializer::{Deserializer, Value};
 use deserializer::*;
@@ -88,6 +87,24 @@ fn kind<'bytes, B: BytesLike<'bytes>, S: Stack>(
   })
 }
 
+/// A field within an object.
+pub struct Field<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> {
+  key: StringKey<'bytes, 'parent, B, S>,
+}
+
+/// Handle a field.
+///
+/// This MUST be called every time a `SingleStepObjectResult::Field` is yielded, unless the
+/// deserializer is immediately terminated (such as by setting its error to `Some(_)`). This
+/// ideally would be yielded within `SingleStepObjectResult::Field`, yet that would cause every
+/// `SingleStepObjectResult` to consume the parent's borrow for the rest of its lifetime, when we
+/// only want to consume it upon `SingleStepObjectResult::Field`.
+fn handle_field<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
+  deserializer: &'parent mut Deserializer<'bytes, B, S>,
+) -> Field<'bytes, 'parent, B, S> {
+  Field { key: StringKey(Some(String::read(deserializer))) }
+}
+
 /// Handle a string value.
 ///
 /// This MUST be called every time a `SingleStepUnknownResult::String` is yielded, unless the
@@ -97,8 +114,37 @@ fn kind<'bytes, B: BytesLike<'bytes>, S: Stack>(
 /// only want to consume it upon `SingleStepUnknownResult::String`.
 fn handle_string_value<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
   deserializer: &'parent mut Deserializer<'bytes, B, S>,
-) -> string2::StringValue<'bytes, 'parent, B, S> {
-  string2::StringValue(string2::String::read(deserializer))
+) -> StringValue<'bytes, 'parent, B, S> {
+  StringValue(String::read(deserializer))
+}
+
+#[rustfmt::skip]
+impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Field<'bytes, 'parent, B, S> {
+  /// Access the iterator for the string used as the field's key.
+  ///
+  /// The iterator will yield the individual characters within the string represented by the JSON
+  /// serialization. The iterator may error if the key does not represent a valid UTF-8 sequence,
+  /// in which case the value may still be accessed (and deserialization may continue), even though
+  /// the rest of the key will not be accessible.
+  #[inline(always)]
+  pub fn key(
+    &mut self,
+  ) -> &mut (impl use<'bytes, 'parent, B, S> + Iterator<Item = Result<char, JsonError<'bytes, B, S>>>)
+  {
+    &mut self.key
+  }
+  /// Access the field's value.
+  #[inline(always)]
+  pub fn value(mut self) -> Value<'bytes, 'parent, B, S> {
+    Value { deserializer: self.key.drop() }
+  }
+}
+
+impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop for Field<'bytes, 'parent, B, S> {
+  #[inline(always)]
+  fn drop(&mut self) {
+    drop(Value { deserializer: self.key.drop() });
+  }
 }
 
 /// An iterator over fields.
@@ -151,17 +197,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> FieldIterator<'bytes, 'par
   /// itself as a complete solution. Please refer to it if you have difficulties calling this
   /// method for context.
   #[allow(clippy::type_complexity, clippy::should_implement_trait)]
-  pub fn next(
-    &mut self,
-  ) -> Option<
-    Result<
-      (
-        impl use<'bytes, B, S> + Iterator<Item = Result<char, JsonError<'bytes, B, S>>>,
-        Value<'bytes, '_, B, S>,
-      ),
-      JsonError<'bytes, B, S>,
-    >,
-  > {
+  pub fn next(&mut self) -> Option<Result<Field<'bytes, '_, B, S>, JsonError<'bytes, B, S>>> {
     if let Some(err) = self.deserializer.error {
       return Some(Err(err));
     }
@@ -177,9 +213,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> FieldIterator<'bytes, 'par
         Err(e) => break Some(Err(e)),
       };
       match result {
-        SingleStepObjectResult::Field { key } => {
-          break Some(Ok((key, Value { deserializer: Some(self.deserializer) })))
-        }
+        SingleStepObjectResult::Field => break Some(Ok(handle_field(self.deserializer))),
         SingleStepObjectResult::Closed => {
           self.done = true;
           None?

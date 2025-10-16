@@ -270,9 +270,10 @@ pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
         let mut key_chars = ['\0'; {largest_key}];
         let mut object = value.fields()?;
         'serialized_field: while let Some(field) = object.next() {{
-          let (mut key, value) = field?;
+          let mut field = field?;
 
           let key = {{
+            let key = field.key();
             let mut key_len = 0;
             while let Some(key_char) = key.next() {{
               key_chars[key_len] = match key_char {{
@@ -301,6 +302,7 @@ pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
             }}
             &key_chars[.. key_len]
           }};
+          let value = field.value();
 
           match key {{
             {fields_deserialization}
