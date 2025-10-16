@@ -8,13 +8,13 @@ extern crate alloc;
 
 mod io;
 mod stack;
-mod string2;
+mod string;
 mod number;
 mod deserializer;
 
 pub use io::BytesLike;
 pub use stack::*;
-use string2::*;
+use string::*;
 pub use number::{NumberSink, Number};
 pub use deserializer::{Deserializer, Value};
 use deserializer::*;
