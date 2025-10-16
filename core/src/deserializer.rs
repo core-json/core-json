@@ -11,7 +11,7 @@ fn advance_whitespace<'bytes, B: BytesLike<'bytes>, S: Stack>(
     if !matches!(next, b'\x20' | b'\x09' | b'\x0A' | b'\x0D') {
       break;
     }
-    bytes.advance(1).map_err(JsonError::BytesError)?;
+    bytes.read_byte().map_err(JsonError::BytesError)?;
   }
   Ok(())
 }
@@ -35,7 +35,7 @@ pub(super) fn advance_past_comma_or_to_close<'bytes, B: BytesLike<'bytes>, S: St
   advance_whitespace(bytes)?;
   match bytes.peek(0).map_err(JsonError::BytesError)? {
     b',' => {
-      bytes.advance(1).map_err(JsonError::BytesError)?;
+      bytes.read_byte().map_err(JsonError::BytesError)?;
       advance_whitespace(bytes)?;
       if matches!(bytes.peek(0).map_err(JsonError::BytesError)?, b']' | b'}') {
         Err(JsonError::TrailingComma)?;
@@ -126,7 +126,7 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
       // Check if the array terminates
       if bytes.peek(0).map_err(JsonError::BytesError)? == b']' {
         stack.pop().ok_or(JsonError::InternalError)?;
-        bytes.advance(1).map_err(JsonError::BytesError)?;
+        bytes.read_byte().map_err(JsonError::BytesError)?;
 
         // If this isn't the outer object, advance past the comma after
         if stack.depth() != 0 {
@@ -146,21 +146,21 @@ fn single_step<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
       let result = match kind(bytes)? {
         // Handle if this opens an object
         Type::Object => {
-          bytes.advance(1).map_err(JsonError::BytesError)?;
+          bytes.read_byte().map_err(JsonError::BytesError)?;
           advance_whitespace(bytes)?;
           stack.push(State::Object).map_err(JsonError::StackError)?;
           return Ok(SingleStepResult::Unknown(SingleStepUnknownResult::ObjectOpened));
         }
         // Handle if this opens an array
         Type::Array => {
-          bytes.advance(1).map_err(JsonError::BytesError)?;
+          bytes.read_byte().map_err(JsonError::BytesError)?;
           advance_whitespace(bytes)?;
           stack.push(State::Array).map_err(JsonError::StackError)?;
           return Ok(SingleStepResult::Unknown(SingleStepUnknownResult::ArrayOpened));
         }
         // Handle if this opens an string
         Type::String => {
-          bytes.advance(1).map_err(JsonError::BytesError)?;
+          bytes.read_byte().map_err(JsonError::BytesError)?;
           return Ok(SingleStepResult::Unknown(SingleStepUnknownResult::String));
         }
         Type::Number => {

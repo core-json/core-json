@@ -23,15 +23,6 @@ pub trait BytesLike<'bytes>: Sized + Debug {
     self.read_into_slice(&mut buf)?;
     Ok(buf[0])
   }
-
-  /// Advance the container by a certain amount of bytes.
-  #[inline(always)]
-  fn advance(&mut self, bytes: usize) -> Result<(), Self::Error> {
-    for _ in 0 .. bytes {
-      self.read_byte()?;
-    }
-    Ok(())
-  }
 }
 
 /// An error when working with `&[u8]`.
