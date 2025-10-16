@@ -80,15 +80,41 @@ pub(super) fn validate_hex(bytes: [u8; 4]) -> bool {
   (ascii & number_or_alpha) == HIGH_BITS
 }
 
-/// Read a `u32` from its hexadecimal encoding.
+/// Read a `u16` from its big-endian hexadecimal encoding.
 #[inline(always)]
 pub(super) fn read_hex<'bytes, B: BytesLike<'bytes>, S: Stack>(
   hex: [u8; 4],
 ) -> Result<u32, JsonError<'bytes, B, S>> {
-  // `InternalError`: `EscapedUnicode` without bytes being UTF-8
-  let hex = core::str::from_utf8(&hex).map_err(|_| JsonError::InternalError)?;
-  // `InternalError`: `EscapedUnicode` without bytes being hex
-  u16::from_str_radix(hex, 16).map(u32::from).map_err(|_| JsonError::InternalError)
+  #[inline(always)]
+  fn hex_char<'bytes, B: BytesLike<'bytes>, S: Stack>(
+    char: u8,
+  ) -> Result<u16, JsonError<'bytes, B, S>> {
+    Ok(match char {
+      b'0' => 0,
+      b'1' => 1,
+      b'2' => 2,
+      b'3' => 3,
+      b'4' => 4,
+      b'5' => 5,
+      b'6' => 6,
+      b'7' => 7,
+      b'8' => 8,
+      b'9' => 9,
+      b'a' | b'A' => 10,
+      b'b' | b'B' => 11,
+      b'c' | b'C' => 12,
+      b'd' | b'D' => 13,
+      b'e' | b'E' => 14,
+      b'f' | b'F' => 15,
+      _ => Err(JsonError::InternalError)?,
+    })
+  }
+  Ok(u32::from(
+    (hex_char(hex[0])? << 12) |
+      (hex_char(hex[1])? << 8) |
+      (hex_char(hex[2])? << 4) |
+      hex_char(hex[3])?,
+  ))
 }
 
 #[test]
