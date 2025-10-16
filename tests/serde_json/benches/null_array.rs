@@ -1,3 +1,6 @@
+#[cfg(debug_assertions)]
+fn main() {}
+#[cfg(not(debug_assertions))]
 #[allow(clippy::unit_arg)]
 fn main() {
   // Generate a array which will be ~1 GB once serialized

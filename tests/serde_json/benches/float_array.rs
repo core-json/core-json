@@ -1,5 +1,9 @@
+#[cfg(not(debug_assertions))]
 use rand_core::{RngCore, OsRng};
 
+#[cfg(debug_assertions)]
+fn main() {}
+#[cfg(not(debug_assertions))]
 fn main() {
   // Generate a 1 GB array
   let mut array = vec![0f64; 1024 * 1024 * 1024 / 8];

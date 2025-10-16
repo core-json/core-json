@@ -1,3 +1,6 @@
+#[cfg(debug_assertions)]
+fn main() {}
+#[cfg(not(debug_assertions))]
 fn main() {
   // Generate a 1 GB string inside an array
   let string = [String::from_utf8(vec![b'A'; 1024 * 1024 * 1024]).unwrap()];

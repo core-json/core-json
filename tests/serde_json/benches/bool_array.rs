@@ -1,5 +1,9 @@
+#[cfg(not(debug_assertions))]
 use rand_core::{RngCore, OsRng};
 
+#[cfg(debug_assertions)]
+fn main() {}
+#[cfg(not(debug_assertions))]
 fn main() {
   // Generate a array which will be ~1 GB once serialized
   let mut array = Vec::with_capacity(1024 * 1024 * 1024 / 4);

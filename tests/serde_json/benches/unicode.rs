@@ -1,3 +1,6 @@
+#[cfg(debug_assertions)]
+fn main() {}
+#[cfg(not(debug_assertions))]
 fn main() {
   // Generate a string which will be ~1 GB once serialized
   let mut string = String::with_capacity(1024 * 1024 * 1024);
