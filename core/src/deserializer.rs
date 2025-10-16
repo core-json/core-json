@@ -314,7 +314,7 @@ impl<'bytes, B: BytesLike<'bytes>, S: Stack> Deserializer<'bytes, B, S> {
   /// be returned.
   #[inline(always)]
   pub fn value(&mut self) -> Result<Value<'bytes, '_, B, S>, JsonError<'bytes, B, S>> {
-    if self.stack.depth() != 1 {
+    if (self.stack.depth() != 1) || self.error.is_some() {
       Err(JsonError::ReusedDeserializer)?;
     }
     let result = Value { deserializer: Some(self) };

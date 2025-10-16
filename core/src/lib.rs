@@ -36,6 +36,8 @@ pub enum JsonError<'bytes, B: BytesLike<'bytes>, S: Stack> {
   InvalidKeyValueDelimiter,
   /// The JSON had an invalid value.
   InvalidValue,
+  /// The string represented by the JSON serialization was valid yet not UTF-8.
+  NotUtf8,
   /// The JSON had a trailing comma.
   TrailingComma,
   /// The JSON had mismatched delimiters between the open and close of the structure.
@@ -123,9 +125,14 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Field<'bytes, 'parent, B, 
   /// Access the iterator for the string used as the field's key.
   ///
   /// The iterator will yield the individual characters within the string represented by the JSON
-  /// serialization. The iterator may error if the key does not represent a valid UTF-8 sequence,
-  /// in which case the value may still be accessed (and deserialization may continue), even though
-  /// the rest of the key will not be accessible.
+  /// serialization, with all escape sequences handled.
+  ///
+  /// If the JSON underlying is invalid, the iterator will error, and while `Field::value` may
+  /// still be called, all further attempted accesses will yield an error.
+  ///
+  /// If the JSON underlying is valid yet does not represent a valid UTF-8 sequence, the iterator
+  /// will error, yet `Field::value` may still be called and deserialization may continue. The rest
+  /// of the key will not be accessible however.
   #[inline(always)]
   pub fn key(
     &mut self,
@@ -178,14 +185,7 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Drop
 }
 
 impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> FieldIterator<'bytes, 'parent, B, S> {
-  /// The next entry (key, value) within the object.
-  ///
-  /// The key is presented as an iterator over the characters within the serialized string, with
-  /// the escape sequences handled. If the key specifies invalid UTF characters, the iterator will
-  /// yield an error when it attempts to parse them. While it may not be possible to parse a key
-  /// as UTF characters, decoding of this field's value (and the rest of the structure) is still
-  /// possible (even _after_ the iterator yields its error). For more information, please refer to
-  /// [`Value::to_str`].
+  /// The next field within the object.
   ///
   /// This is approximate to `Iterator::next` yet each item maintains a mutable reference to the
   /// iterator. Accordingly, we cannot use `Iterator::next` which requires items not borrow from
@@ -354,7 +354,9 @@ impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Value<'bytes, 'parent, B, 
   ///
   /// RFC 8259 allows strings to specify invalid UTF-8 codepoints. This library supports working
   /// with such values, as required to be compliant with RFC 8259, but this function's return value
-  /// will error when attempting to return a non-UTF-8 value. Please keep this subtlety in mind.
+  /// will error when attempting to return a non-UTF-8 value. If the underlying JSON is valid, the
+  /// deserializer will remain usable afterwards however, even though the rest of the non-UTF-8
+  /// string will be inaccesible. Please keep this detail in mind.
   #[inline(always)]
   pub fn to_str(
     mut self,

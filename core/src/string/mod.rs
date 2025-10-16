@@ -145,11 +145,11 @@ fn handle_escaped_unicode<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
       deserializer as a whole to fail.
     */
     let Some(Ok(StringCharacter::EscapedUnicode(hex))) = validation.next() else {
-      Err(JsonError::InvalidValue)?
+      Err(JsonError::NotUtf8)?
     };
     let low = read_hex(hex)?;
 
-    let Some(low) = low.checked_sub(0xdc00) else { Err(JsonError::InvalidValue)? };
+    let Some(low) = low.checked_sub(0xdc00) else { Err(JsonError::NotUtf8)? };
     high + low + 0x10000
   } else {
     // If `next` isn't a surrogate, it's interpreted as a codepoint as-is
@@ -157,7 +157,7 @@ fn handle_escaped_unicode<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack>(
   };
 
   // Yield the codepoint
-  char::from_u32(codepoint).ok_or(JsonError::InvalidValue)
+  char::from_u32(codepoint).ok_or(JsonError::NotUtf8)
 }
 
 impl<'bytes, 'parent, B: BytesLike<'bytes>, S: Stack> Iterator for String<'bytes, 'parent, B, S> {
