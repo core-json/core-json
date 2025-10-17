@@ -102,6 +102,7 @@ pub struct Field<'read, 'parent, R: Read<'read>, S: Stack> {
 /// ideally would be yielded within `SingleStepObjectResult::Field`, yet that would cause every
 /// `SingleStepObjectResult` to consume the parent's borrow for the rest of its lifetime, when we
 /// only want to consume it upon `SingleStepObjectResult::Field`.
+#[inline(always)]
 fn handle_field<'read, 'parent, R: Read<'read>, S: Stack>(
   deserializer: &'parent mut Deserializer<'read, R, S>,
 ) -> Field<'read, 'parent, R, S> {
@@ -115,6 +116,7 @@ fn handle_field<'read, 'parent, R: Read<'read>, S: Stack>(
 /// ideally would be yielded within `SingleStepUnknownResult::String`, yet that would cause every
 /// `SingleStepUnknownResult` to consume the parent's borrow for the rest of its lifetime, when we
 /// only want to consume it upon `SingleStepUnknownResult::String`.
+#[inline(always)]
 fn handle_string_value<'read, 'parent, R: Read<'read>, S: Stack>(
   deserializer: &'parent mut Deserializer<'read, R, S>,
 ) -> StringValue<'read, 'parent, R, S> {
@@ -303,6 +305,7 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
   /// Iterate over the fields within this object.
   ///
   /// If a field is present multiple times, this will yield each instance.
+  #[inline(always)]
   pub fn fields(mut self) -> Result<FieldIterator<'read, 'parent, R, S>, JsonError<'read, R, S>> {
     if !matches!(self.kind()?, Type::Object) {
       Err(JsonError::TypeError)?
@@ -322,6 +325,7 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
   }
 
   /// Iterate over all items within this container.
+  #[inline(always)]
   pub fn iterate(mut self) -> Result<ArrayIterator<'read, 'parent, R, S>, JsonError<'read, R, S>> {
     if !matches!(self.kind()?, Type::Array) {
       Err(JsonError::TypeError)?

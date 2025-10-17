@@ -17,6 +17,7 @@ fn advance_whitespace<'read, R: Read<'read>, S: Stack>(
 }
 
 /// Advance past a colon.
+#[inline(always)]
 pub(super) fn advance_past_colon<'read, R: Read<'read>, S: Stack>(
   reader: &mut PeekableRead<'read, R>,
 ) -> Result<(), JsonError<'read, R, S>> {
@@ -29,6 +30,7 @@ pub(super) fn advance_past_colon<'read, R: Read<'read>, S: Stack>(
 }
 
 /// Advance past a comma, or to the close of the structure.
+#[inline(always)]
 pub(super) fn advance_past_comma_or_to_close<'read, R: Read<'read>, S: Stack>(
   reader: &mut PeekableRead<'read, R>,
 ) -> Result<(), JsonError<'read, R, S>> {
@@ -211,6 +213,7 @@ pub struct Deserializer<'read, R: Read<'read>, S: Stack> {
 }
 
 impl<'read, R: Read<'read>, S: Stack> Deserializer<'read, R, S> {
+  #[inline(always)]
   pub(super) fn single_step(&mut self) -> Result<SingleStepResult, JsonError<'read, R, S>> {
     if let Some(e) = self.error {
       Err(e)?;
@@ -301,6 +304,7 @@ impl<'read, R: Read<'read>, S: Stack> Deserializer<'read, R, S> {
   /// If `reader` is aligned to valid JSON, this will read past the immediately present structure
   /// yet no further. If `reader` is not aligned to valid JSON, the state of `reader` is undefined
   /// after this.
+  #[inline(always)]
   pub fn new(reader: R) -> Result<Self, JsonError<'read, R, S>> {
     let mut reader = PeekableRead::from(reader);
     advance_whitespace(&mut reader)?;
