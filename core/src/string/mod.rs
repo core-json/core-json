@@ -8,13 +8,70 @@ use hex::*;
 
 /// An iterator which validates a string, yielding the items within.
 ///
-/// This will yield `None` upon reaching a `"` and for all successive calls to `Iterator::next`.
+/// This will yield `None` upon reaching a `"`, but is not fused and has undefined behavior upon
+/// successive calls to `Iterator::next`.
 ///
 /// This does not implement `Drop`. It is the caller's responsibility to exhaust this iterator to
 /// ensure the deserializer is advanced correctly.
 pub(crate) struct ValidateString<'read, 'parent, R: Read<'read>, S: Stack> {
   deserializer: &'parent mut Deserializer<'read, R, S>,
   done: bool,
+}
+
+impl<'read, 'parent, R: Read<'read>, S: Stack> ValidateString<'read, 'parent, R, S> {
+  #[inline(always)]
+  fn next_char(&mut self) -> Result<Option<StringCharacter>, JsonError<'read, R, S>> {
+    if let Some(e) = self.deserializer.error {
+      return Err(e);
+    }
+
+    let this = self.deserializer.reader.read_byte().map_err(JsonError::ReadError)?;
+
+    // https://datatracker.ietf.org/doc/html/rfc8259#section-7
+    Ok(match this {
+      // The characters allowed to be unescaped
+      b'\x20' ..= b'\x21' | b'\x23' ..= b'\x5b' | b'\x5d' ..= b'\x7f' => {
+        Some(StringCharacter::Character(this as char))
+      }
+      b'\x80' ..= b'\xff' => {
+        Some(StringCharacter::Character(read_non_ascii_utf8(&mut self.deserializer.reader, this)?))
+      }
+      // The escaping character
+      b'\\' => {
+        // All characters which are valid to be escaped are ASCII, allowing us to use `read_byte`
+        // here
+        let escaped = self.deserializer.reader.read_byte().map_err(JsonError::ReadError)?;
+        match escaped {
+          b'"' | b'\\' | b'/' => Some(StringCharacter::Character(escaped as char)),
+          b'b' => Some(StringCharacter::Character('\x08')),
+          b'f' => Some(StringCharacter::Character('\x0c')),
+          b'n' => Some(StringCharacter::Character('\n')),
+          b'r' => Some(StringCharacter::Character('\r')),
+          b't' => Some(StringCharacter::Character('\t')),
+          // If this is "\u", check it's followed by hex characters
+          b'\x75' => {
+            // We can use `read_byte` here as valid hex characters will be ASCII (one-byte)
+            let bytes = [
+              self.deserializer.reader.read_byte().map_err(JsonError::ReadError)?,
+              self.deserializer.reader.read_byte().map_err(JsonError::ReadError)?,
+              self.deserializer.reader.read_byte().map_err(JsonError::ReadError)?,
+              self.deserializer.reader.read_byte().map_err(JsonError::ReadError)?,
+            ];
+            if !validate_hex(bytes) {
+              Err(JsonError::InvalidValue)?;
+            }
+            Some(StringCharacter::EscapedUnicode(bytes))
+          }
+          _ => Err(JsonError::InvalidValue)?,
+        }
+      }
+      b'"' => {
+        self.done = true;
+        None
+      }
+      _ => Err(JsonError::InvalidValue)?,
+    })
+  }
 }
 
 /// A character within a JSON-serialized string.
@@ -29,66 +86,15 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Iterator for ValidateString<'read
   type Item = Result<StringCharacter, JsonError<'read, R, S>>;
   #[inline(always)]
   fn next(&mut self) -> Option<Self::Item> {
-    if let Some(e) = self.deserializer.error {
-      return Some(Err(e));
+    match self.next_char() {
+      Ok(Some(res)) => Some(Ok(res)),
+      Ok(None) => None,
+      Err(e) => {
+        self.deserializer.error = Some(e);
+        self.done = true;
+        Some(Err(e))
+      }
     }
-    if self.done {
-      None?;
-    }
-
-    let res = (|| {
-      let this = read_utf8(&mut self.deserializer.reader)?;
-
-      // https://datatracker.ietf.org/doc/html/rfc8259#section-7
-      Ok(match this {
-        // The characters allowed to be unescaped
-        '\x20' ..= '\x21' | '\x23' ..= '\x5b' | '\x5d' ..= '\u{10ffff}' => {
-          Some(StringCharacter::Character(this))
-        }
-        // The escaping character
-        '\\' => {
-          // All characters which are valid to be escaped are ASCII, allowing us to use `read_byte`
-          // here
-          let escaped = self.deserializer.reader.read_byte().map_err(JsonError::ReadError)?;
-          match escaped {
-            b'"' => Some(StringCharacter::Character('"')),
-            b'\\' => Some(StringCharacter::Character('\\')),
-            b'/' => Some(StringCharacter::Character('/')),
-            b'b' => Some(StringCharacter::Character('\x08')),
-            b'f' => Some(StringCharacter::Character('\x0c')),
-            b'n' => Some(StringCharacter::Character('\n')),
-            b'r' => Some(StringCharacter::Character('\r')),
-            b't' => Some(StringCharacter::Character('\t')),
-            // If this is "\u", check it's followed by hex characters
-            b'\x75' => {
-              // We use `read_byte`, not `read_utf8`, here as hex characters will be ASCII
-              let bytes = [
-                self.deserializer.reader.read_byte().map_err(JsonError::ReadError)?,
-                self.deserializer.reader.read_byte().map_err(JsonError::ReadError)?,
-                self.deserializer.reader.read_byte().map_err(JsonError::ReadError)?,
-                self.deserializer.reader.read_byte().map_err(JsonError::ReadError)?,
-              ];
-              if !validate_hex(bytes) {
-                Err(JsonError::InvalidValue)?;
-              }
-              Some(StringCharacter::EscapedUnicode(bytes))
-            }
-            _ => Err(JsonError::InvalidValue)?,
-          }
-        }
-        '"' => {
-          self.done = true;
-          None
-        }
-        _ => Err(JsonError::InvalidValue)?,
-      })
-    })();
-
-    if let Some(e) = res.as_ref().err() {
-      self.deserializer.error = Some(*e);
-    }
-
-    res.transpose()
   }
 }
 
@@ -106,9 +112,11 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> String<'read, 'parent, R, S> {
   }
 
   #[inline(always)]
-  fn drop(&mut self) -> &mut &'parent mut Deserializer<'read, R, S> {
-    while let Some(Ok(_)) = self.validation.next() {}
-    &mut self.validation.deserializer
+  fn drop(&mut self) {
+    while !self.validation.done {
+      // We don't handle the error here as `<ValidateString as Iterator>::next` will
+      self.validation.next();
+    }
   }
 }
 
@@ -166,7 +174,7 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Iterator for String<'read, 'paren
   type Item = Result<char, JsonError<'read, R, S>>;
   #[inline(always)]
   fn next(&mut self) -> Option<Self::Item> {
-    if self.errored {
+    if self.errored | self.validation.done {
       None?;
     }
 
@@ -222,7 +230,9 @@ pub(crate) struct StringValue<'read, 'parent, R: Read<'read>, S: Stack>(
 impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for StringValue<'read, 'parent, R, S> {
   #[inline(always)]
   fn drop(&mut self) {
-    let deserializer = self.0.drop();
+    let string = &mut self.0;
+    string.drop();
+    let deserializer = &mut string.validation.deserializer;
     if deserializer.error.is_none() {
       match crate::advance_past_comma_or_to_close(&mut deserializer.reader) {
         Ok(()) => {}

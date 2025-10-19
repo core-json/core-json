@@ -22,14 +22,13 @@ fn utf8_codepoint_to_char<'read, R: Read<'read>, S: Stack>(
     1 => u32::from(c[0]),
     2 => (u32::from(c[0] & 0b0001_1111) << 6) | u32::from(c[1] & SIX_BITS),
     3 => {
-      (u32::from(c[0] & 0b0000_1111) << 12) |
-        (u32::from(c[1] & SIX_BITS) << 6) |
+      (((u32::from(c[0] & 0b0000_1111) << 6) | u32::from(c[1] & SIX_BITS)) << 6) |
         u32::from(c[2] & SIX_BITS)
     }
     4 => {
-      (u32::from(c[0] & 0b0000_0111) << 18) |
-        (u32::from(c[1] & SIX_BITS) << 12) |
-        (u32::from(c[2] & SIX_BITS) << 6) |
+      (((((u32::from(c[0] & 0b0000_0111) << 6) | u32::from(c[1] & SIX_BITS)) << 6) |
+        u32::from(c[2] & SIX_BITS)) <<
+        6) |
         u32::from(c[3] & SIX_BITS)
     }
     _ => unreachable!("non-ASCII codepoints have length in `2 ..= 4`"),
@@ -37,20 +36,17 @@ fn utf8_codepoint_to_char<'read, R: Read<'read>, S: Stack>(
   .ok_or(JsonError::InvalidValue)
 }
 
-/// Read a UTF-8 character from a `Read`.
+/// Read a non-ASCII UTF-8 character from a `Read`.
 #[inline(always)]
-pub(super) fn read_utf8<'read, R: Read<'read>, S: Stack>(
+pub(super) fn read_non_ascii_utf8<'read, R: Read<'read>, S: Stack>(
   reader: &mut PeekableRead<'read, R>,
+  first_byte: u8,
 ) -> Result<char, JsonError<'read, R, S>> {
-  let mut utf8_codepoint = [0; 4];
-  utf8_codepoint[0] = reader.read_byte().map_err(JsonError::ReadError)?;
-  // If this is ASCII, immediately return it.
-  if (utf8_codepoint[0] >> 7) == 0 {
-    return Ok(utf8_codepoint[0] as char);
-  }
-  let utf8_codepoint_len = non_ascii_utf8_codepoint_len(utf8_codepoint[0]);
+  let utf8_codepoint_len = non_ascii_utf8_codepoint_len(first_byte);
 
+  let mut utf8_codepoint = [0; 4];
   let utf8_codepoint = &mut utf8_codepoint[.. utf8_codepoint_len];
+  utf8_codepoint[0] = first_byte;
   for byte in &mut utf8_codepoint[1 ..] {
     *byte = reader.read_byte().map_err(JsonError::ReadError)?;
   }

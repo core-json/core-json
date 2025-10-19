@@ -6,7 +6,7 @@ struct PackedStates<const ONE_FOURTH_OF_MAX_DEPTH: usize>([u8; ONE_FOURTH_OF_MAX
 impl<const ONE_FOURTH_OF_MAX_DEPTH: usize> PackedStates<ONE_FOURTH_OF_MAX_DEPTH> {
   #[inline(always)]
   fn get(&self, i: usize) -> State {
-    let mut entry = self.0[i / 4];
+    let mut entry = self.0[i >> 2];
     entry >>= (i & 0b11) * 2;
     entry &= 0b11;
     match entry {
@@ -27,9 +27,9 @@ impl<const ONE_FOURTH_OF_MAX_DEPTH: usize> PackedStates<ONE_FOURTH_OF_MAX_DEPTH>
     };
     let shift = (i & 0b11) * 2;
     // Clear the existing value in this slot
-    self.0[i / 4] &= !(0b00000011 << shift);
+    self.0[i >> 2] &= !(0b00000011 << shift);
     // Set the new value
-    self.0[i / 4] |= two_bits << shift;
+    self.0[i >> 2] |= two_bits << shift;
   }
 }
 
