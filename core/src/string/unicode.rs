@@ -51,7 +51,9 @@ pub(super) fn read_utf8<'read, R: Read<'read>, S: Stack>(
   let utf8_codepoint_len = non_ascii_utf8_codepoint_len(utf8_codepoint[0]);
 
   let utf8_codepoint = &mut utf8_codepoint[.. utf8_codepoint_len];
-  reader.read_into_slice(&mut utf8_codepoint[1 ..]).map_err(JsonError::ReadError)?;
+  for byte in &mut utf8_codepoint[1 ..] {
+    *byte = reader.read_byte().map_err(JsonError::ReadError)?;
+  }
   utf8_codepoint_to_char(utf8_codepoint)
 }
 

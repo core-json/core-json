@@ -26,8 +26,11 @@ impl<R: Read<Error: Copy>> From<R> for ReadAdapter<R> {
 impl<R: Read<Error: Copy>> CjRead<'static> for ReadAdapter<R> {
   type Error = ReadExactError<R::Error>;
 
-  fn read_into_slice(&mut self, slice: &mut [u8]) -> Result<(), Self::Error> {
-    self.reader.read_exact(slice)
+  #[inline(always)]
+  fn read_byte(&mut self) -> Result<u8, Self::Error> {
+    let mut res = [0; 1];
+    self.reader.read_exact(&mut res)?;
+    Ok(res[0])
   }
 }
 

@@ -77,17 +77,15 @@ pub enum Type {
 /// This does not assert it's a valid instance of this class of items. It solely asserts if this
 /// is a valid item, it will be of this type.
 #[inline(always)]
-fn kind<'read, R: Read<'read>, S: Stack>(
-  reader: &mut PeekableRead<'read, R>,
-) -> Result<Type, JsonError<'read, R, S>> {
-  Ok(match reader.peek().map_err(JsonError::ReadError)? {
+fn kind<'read, R: Read<'read>>(reader: &PeekableRead<'read, R>) -> Type {
+  match reader.peek() {
     b'{' => Type::Object,
     b'[' => Type::Array,
     b'"' => Type::String,
     b't' | b'f' => Type::Bool,
     b'n' => Type::Null,
     _ => Type::Number,
-  })
+  }
 }
 
 /// A field within an object.
@@ -299,7 +297,7 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
   /// is a valid item, it will be of this type.
   #[inline(always)]
   pub fn kind(&mut self) -> Result<Type, JsonError<'read, R, S>> {
-    kind(&mut self.deserializer.as_mut().ok_or(JsonError::InternalError)?.reader)
+    Ok(kind(&self.deserializer.as_ref().ok_or(JsonError::InternalError)?.reader))
   }
 
   /// Iterate over the fields within this object.

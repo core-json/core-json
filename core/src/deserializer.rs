@@ -5,12 +5,12 @@ use crate::*;
 fn advance_whitespace<'read, R: Read<'read>, S: Stack>(
   reader: &mut PeekableRead<'read, R>,
 ) -> Result<(), JsonError<'read, R, S>> {
-  loop {
-    let next = reader.peek().map_err(JsonError::ReadError)?;
+  let mut next;
+  while {
+    next = reader.peek();
     // https://datatracker.ietf.org/doc/html/rfc8259#section-2 defines whitespace as follows
-    if !matches!(next, b'\x20' | b'\x09' | b'\x0A' | b'\x0D') {
-      break;
-    }
+    matches!(next, b'\x20' | b'\x09' | b'\x0A' | b'\x0D')
+  } {
     reader.read_byte().map_err(JsonError::ReadError)?;
   }
   Ok(())
@@ -35,11 +35,11 @@ pub(super) fn advance_past_comma_or_to_close<'read, R: Read<'read>, S: Stack>(
   reader: &mut PeekableRead<'read, R>,
 ) -> Result<(), JsonError<'read, R, S>> {
   advance_whitespace(reader)?;
-  match reader.peek().map_err(JsonError::ReadError)? {
+  match reader.peek() {
     b',' => {
       reader.read_byte().map_err(JsonError::ReadError)?;
       advance_whitespace(reader)?;
-      if matches!(reader.peek().map_err(JsonError::ReadError)?, b']' | b'}') {
+      if matches!(reader.peek(), b']' | b'}') {
         Err(JsonError::TrailingComma)?;
       }
     }
@@ -101,7 +101,7 @@ fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
 ) -> Result<SingleStepResult, JsonError<'read, R, S>> {
   match stack.peek().ok_or(JsonError::InternalError)? {
     State::Object => {
-      let next = reader.read_byte().map_err(JsonError::ReadError)?;
+      let next = reader.peek();
 
       // Check if the object terminates
       if next == b'}' {
@@ -109,6 +109,13 @@ fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
 
         // If this isn't the outer object, advance past the comma after
         if stack.depth() != 0 {
+          // Advance past the '}'
+          /*
+            We only do this when the object *isn't* closing to prevent reading past the boundary of
+            the object, as the '}' was already internally read (consumed from the underlying
+            reader) by `PeekableRead`.
+          */
+          reader.read_byte().map_err(JsonError::ReadError)?;
           advance_past_comma_or_to_close(reader)?;
         }
 
@@ -119,6 +126,8 @@ fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
       if next != b'"' {
         Err(JsonError::InvalidKey)?;
       }
+      // Advance past the '"'
+      reader.read_byte().map_err(JsonError::ReadError)?;
 
       // Push how we're reading a value of an unknown type onto the stack, for the value
       stack.push(State::Unknown).map_err(JsonError::StackError)?;
@@ -126,12 +135,12 @@ fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
     }
     State::Array => {
       // Check if the array terminates
-      if reader.peek().map_err(JsonError::ReadError)? == b']' {
+      if reader.peek() == b']' {
         stack.pop().ok_or(JsonError::InternalError)?;
-        reader.read_byte().map_err(JsonError::ReadError)?;
 
         // If this isn't the outer object, advance past the comma after
         if stack.depth() != 0 {
+          reader.read_byte().map_err(JsonError::ReadError)?;
           advance_past_comma_or_to_close(reader)?;
         }
 
@@ -145,7 +154,7 @@ fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
     State::Unknown => {
       stack.pop().ok_or(JsonError::InternalError)?;
 
-      let result = match kind(reader)? {
+      let result = match kind(reader) {
         // Handle if this opens an object
         Type::Object => {
           reader.read_byte().map_err(JsonError::ReadError)?;
@@ -169,12 +178,17 @@ fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
           SingleStepResult::Unknown(SingleStepUnknownResult::Number(number::to_number_str(reader)?))
         }
         Type::Bool => {
-          let mut bool_string = [0; 5];
-          reader.read_into_slice(&mut bool_string[.. 4]).map_err(JsonError::ReadError)?;
+          let mut bool_string = [
+            reader.read_byte().map_err(JsonError::ReadError)?,
+            reader.read_byte().map_err(JsonError::ReadError)?,
+            reader.read_byte().map_err(JsonError::ReadError)?,
+            reader.read_byte().map_err(JsonError::ReadError)?,
+            0,
+          ];
           let bool = if &bool_string[.. 4] == b"true" {
             true
           } else {
-            reader.read_into_slice(&mut bool_string[4 ..]).map_err(JsonError::ReadError)?;
+            bool_string[4] = reader.read_byte().map_err(JsonError::ReadError)?;
             if bool_string != *b"false" {
               Err(JsonError::TypeError)?;
             }
@@ -183,8 +197,12 @@ fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
           SingleStepResult::Unknown(SingleStepUnknownResult::Bool(bool))
         }
         Type::Null => {
-          let mut null_string = [0; 4];
-          reader.read_into_slice(&mut null_string).map_err(JsonError::ReadError)?;
+          let null_string = [
+            reader.read_byte().map_err(JsonError::ReadError)?,
+            reader.read_byte().map_err(JsonError::ReadError)?,
+            reader.read_byte().map_err(JsonError::ReadError)?,
+            reader.read_byte().map_err(JsonError::ReadError)?,
+          ];
           if null_string != *b"null" {
             Err(JsonError::TypeError)?;
           }
@@ -301,12 +319,15 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for Value<'read, 'parent, R,
 impl<'read, R: Read<'read>, S: Stack> Deserializer<'read, R, S> {
   /// Create a new deserializer.
   ///
+  /// This will advance past any whitespace present at the start of the reader, per RFC 8259's
+  /// definition of whitespace.
+  ///
   /// If `reader` is aligned to valid JSON, this will read past the immediately present structure
   /// yet no further. If `reader` is not aligned to valid JSON, the state of `reader` is undefined
   /// after this.
   #[inline(always)]
   pub fn new(reader: R) -> Result<Self, JsonError<'read, R, S>> {
-    let mut reader = PeekableRead::from(reader);
+    let mut reader = PeekableRead::try_from(reader).map_err(JsonError::ReadError)?;
     advance_whitespace(&mut reader)?;
 
     let mut stack = S::empty();

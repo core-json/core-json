@@ -10,56 +10,37 @@ pub trait Read<'read>: Sized + Debug {
   /// The type for errors when interacting with this reader.
   type Error: Sized + Copy + Debug;
 
-  /// Read a fixed amount of bytes from the reader into a slice.
-  fn read_into_slice(&mut self, slice: &mut [u8]) -> Result<(), Self::Error>;
+  /// Read a single byte from the reader.
+  fn read_byte(&mut self) -> Result<u8, Self::Error>;
 }
 
 /// A wrapper for an `impl Read` with a one-byte buffer, enabling peeking.
+///
+/// This will always read at least one byte from the underlying reader.
 pub(crate) struct PeekableRead<'read, R: Read<'read>> {
-  buffer: Option<u8>,
+  buffer: u8,
   reader: R,
   _read: PhantomData<&'read ()>,
 }
 
-impl<'read, R: Read<'read>> From<R> for PeekableRead<'read, R> {
-  fn from(reader: R) -> Self {
-    Self { buffer: None, reader, _read: PhantomData }
+impl<'read, R: Read<'read>> PeekableRead<'read, R> {
+  pub(crate) fn try_from(mut reader: R) -> Result<Self, R::Error> {
+    Ok(Self { buffer: reader.read_byte()?, reader, _read: PhantomData })
   }
 }
 
 impl<'read, R: Read<'read>> PeekableRead<'read, R> {
+  #[must_use]
   #[inline(always)]
-  pub(crate) fn peek(&mut self) -> Result<u8, R::Error> {
-    Ok(match self.buffer {
-      Some(byte) => byte,
-      None => {
-        let mut buffer = [0u8; 1];
-        self.reader.read_into_slice(&mut buffer)?;
-        self.buffer = Some(buffer[0]);
-        buffer[0]
-      }
-    })
-  }
-
-  #[inline(always)]
-  pub(crate) fn read_into_slice(&mut self, slice: &mut [u8]) -> Result<(), R::Error> {
-    if slice.is_empty() {
-      return Ok(());
-    }
-    let i = if let Some(byte) = self.buffer.take() {
-      slice[0] = byte;
-      1
-    } else {
-      0
-    };
-    self.reader.read_into_slice(&mut slice[i ..])
+  pub(crate) fn peek(&self) -> u8 {
+    self.buffer
   }
 
   #[inline(always)]
   pub(crate) fn read_byte(&mut self) -> Result<u8, R::Error> {
-    let mut buf = [0; 1];
-    self.read_into_slice(&mut buf)?;
-    Ok(buf[0])
+    let res = self.buffer;
+    self.buffer = self.reader.read_byte()?;
+    Ok(res)
   }
 }
 
@@ -67,21 +48,18 @@ impl<'read, R: Read<'read>> PeekableRead<'read, R> {
 #[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 pub enum SliceError {
-  /// The blob was short, as discovered when trying to read `{0}` bytes.
-  Short(usize),
+  /// The slice was empty.
+  Empty,
 }
 
 impl<'read> Read<'read> for &'read [u8] {
   type Error = SliceError;
 
   #[inline(always)]
-  fn read_into_slice(&mut self, slice: &mut [u8]) -> Result<(), Self::Error> {
-    if self.len() < slice.len() {
-      Err(SliceError::Short(slice.len()))?;
-    }
-    slice.copy_from_slice(&self[.. slice.len()]);
-    *self = &self[slice.len() ..];
-    Ok(())
+  fn read_byte(&mut self) -> Result<u8, Self::Error> {
+    let res = *self.first().ok_or(SliceError::Empty)?;
+    *self = &self[1 ..];
+    Ok(res)
   }
 }
 
@@ -89,7 +67,7 @@ impl<'read, R: Read<'read>> Read<'read> for &mut R {
   type Error = R::Error;
 
   #[inline(always)]
-  fn read_into_slice(&mut self, slice: &mut [u8]) -> Result<(), Self::Error> {
-    R::read_into_slice(self, slice)
+  fn read_byte(&mut self) -> Result<u8, Self::Error> {
+    R::read_byte(self)
   }
 }

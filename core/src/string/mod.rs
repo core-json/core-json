@@ -61,9 +61,13 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Iterator for ValidateString<'read
             b't' => Some(StringCharacter::Character('\t')),
             // If this is "\u", check it's followed by hex characters
             b'\x75' => {
-              // We use `read_into_slice`, not `read_utf8`, here as hex characters will be ASCII
-              let mut bytes = [0; 4];
-              self.deserializer.reader.read_into_slice(&mut bytes).map_err(JsonError::ReadError)?;
+              // We use `read_byte`, not `read_utf8`, here as hex characters will be ASCII
+              let bytes = [
+                self.deserializer.reader.read_byte().map_err(JsonError::ReadError)?,
+                self.deserializer.reader.read_byte().map_err(JsonError::ReadError)?,
+                self.deserializer.reader.read_byte().map_err(JsonError::ReadError)?,
+                self.deserializer.reader.read_byte().map_err(JsonError::ReadError)?,
+              ];
               if !validate_hex(bytes) {
                 Err(JsonError::InvalidValue)?;
               }

@@ -439,7 +439,7 @@ pub(crate) fn to_number_str<'read, R: Read<'read>, S: Stack>(
 
   // Read until a byte which isn't part of the number, sinking along the way
   loop {
-    let char = reader.peek().map_err(|e| JsonError::ReadError(e))?;
+    let char = reader.peek();
     // separator, array closure, object closure, whitespace
     // https://datatracker.ietf.org/doc/html/rfc8259#section-2
     if matches!(char, b',' | b']' | b'}' | b'\x20' | b'\x09' | b'\x0A' | b'\x0D') {
