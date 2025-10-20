@@ -178,18 +178,13 @@ fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
           SingleStepResult::Unknown(SingleStepUnknownResult::Number(number::to_number_str(reader)?))
         }
         Type::Bool => {
-          let mut bool_string = [
-            reader.read_byte().map_err(JsonError::ReadError)?,
-            reader.read_byte().map_err(JsonError::ReadError)?,
-            reader.read_byte().map_err(JsonError::ReadError)?,
-            reader.read_byte().map_err(JsonError::ReadError)?,
-            0,
-          ];
-          let bool = if &bool_string[.. 4] == b"true" {
+          let mut bool_string = [0; 4];
+          reader.read_exact_into_non_empty_slice(&mut bool_string).map_err(JsonError::ReadError)?;
+          let bool = if &bool_string == b"true" {
             true
           } else {
-            bool_string[4] = reader.read_byte().map_err(JsonError::ReadError)?;
-            if bool_string != *b"false" {
+            let e = reader.read_byte().map_err(JsonError::ReadError)?;
+            if !((bool_string == *b"fals") & (e == b'e')) {
               Err(JsonError::TypeError)?;
             }
             false
@@ -204,7 +199,7 @@ fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
             reader.read_byte().map_err(JsonError::ReadError)?,
           ];
           if null_string != *b"null" {
-            Err(JsonError::TypeError)?;
+            Err(JsonError::InvalidValue)?;
           }
           SingleStepResult::Unknown(SingleStepUnknownResult::Null)
         }
