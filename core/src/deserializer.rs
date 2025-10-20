@@ -192,12 +192,8 @@ fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
           SingleStepResult::Unknown(SingleStepUnknownResult::Bool(bool))
         }
         Type::Null => {
-          let null_string = [
-            reader.read_byte().map_err(JsonError::ReadError)?,
-            reader.read_byte().map_err(JsonError::ReadError)?,
-            reader.read_byte().map_err(JsonError::ReadError)?,
-            reader.read_byte().map_err(JsonError::ReadError)?,
-          ];
+          let mut null_string = [0; 4];
+          reader.read_exact_into_non_empty_slice(&mut null_string).map_err(JsonError::ReadError)?;
           if null_string != *b"null" {
             Err(JsonError::InvalidValue)?;
           }
