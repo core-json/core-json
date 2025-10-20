@@ -310,10 +310,6 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
     }
 
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
-    if let Some(err) = deserializer.error {
-      Err(err)?;
-    }
-
     match deserializer.single_step()? {
       SingleStepResult::Unknown(SingleStepUnknownResult::ObjectOpened) => {
         Ok(FieldIterator { deserializer, done: false })
@@ -330,10 +326,6 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
     }
 
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
-    if let Some(err) = deserializer.error {
-      Err(err)?;
-    }
-
     match deserializer.single_step()? {
       SingleStepResult::Unknown(SingleStepUnknownResult::ArrayOpened) => {
         Ok(ArrayIterator { deserializer, done: false })
