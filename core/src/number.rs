@@ -45,15 +45,17 @@ const SIGNIFICANT_DIGITS: usize = if I64_SIGNIFICANT_DIGITS > F64_SIGNIFICANT_DI
 pub struct NumberSink {
   /// If a sign character is currently allowed within the sink.
   sign_character_allowed: bool,
-  /// The amount of digits read for the current part.
-  digits_in_current_part: usize,
+  /// If we've read any digits for the current part.
+  digits_in_current_part: bool,
 
   /// The sign of the number.
   negative: bool,
   /// The significant digits within the number.
   ///
   /// These will be ASCII characters in the range '0' ..= '9', and '0' if not explicitly set.
-  digits: [u8; SIGNIFICANT_DIGITS],
+  ///
+  /// An additional `1` is included for a single leading zero.
+  digits: [u8; 1 + SIGNIFICANT_DIGITS],
   /// The amount of dsigits accumulated.
   i: usize,
 
@@ -97,8 +99,9 @@ impl NumberSink {
   #[inline(always)]
   pub fn new() -> Self {
     Self {
+      // A negative sign character is allowed at the very start of the number.
       sign_character_allowed: true,
-      digits_in_current_part: 0,
+      digits_in_current_part: false,
       negative: false,
       digits: [b'0'; _],
       i: 0,
@@ -114,132 +117,133 @@ impl NumberSink {
 
   /// Push a byte, intended to be an ASCII character, into the sink.
   ///
-  /// If `strict` is true, this will apply the validation rules from RFC-8259.
+  /// This will apply the validation rules from RFC-8259.
   /*
-    The syntax we apply when `strict = true` is (expanded)
-    `[ minus ] int [ decimal-point 1*DIGIT ] [ e [ minus / plus ] 1*DIGIT ]`.
+    The syntax we apply is (expanded)
+    `[ minus ] [ 0 / [ 1-9 *DIGIT ] ] [ decimal-point 1*DIGIT ] [ e [ minus / plus ] 1*DIGIT ]`.
 
     https://datatracker.ietf.org/doc/html/rfc8259#section-6 lets us specify the range, precision
     of numbers.
   */
   #[inline(always)]
-  fn push_byte(&mut self, strict: bool, c: u8) {
-    if self.invalid {
-      return;
+  fn push_byte(&mut self, c: u8) -> bool {
+    if self.sign_character_allowed {
+      // sign characters are only allowed in the initial positions
+      self.sign_character_allowed = false;
+
+      if c == b'-' {
+        self.negative |= self.before_exponent;
+        self.negative_exponent |= !self.before_exponent;
+        return true;
+      }
+      if c == b'+' {
+        // `+` is only allowed with the exponent, not for the integer
+        self.invalid |= self.before_exponent;
+        return true;
+      }
     }
 
-    let sign_character_allowed = self.sign_character_allowed;
-    self.sign_character_allowed = false;
+    if self.before_decimal {
+      match c {
+        b'0' ..= b'9' => {
+          // We do not allow leading zeroes for the integer part, unless it's solely zero
+          self.invalid |= self.digits_in_current_part & (self.digits[0] == b'0');
+          self.digits_in_current_part = true;
+
+          let within_precision = self.i != self.digits.len();
+          if within_precision {
+            // Write the digit
+            self.digits[self.i] = c;
+            // This may write, for a valid number, a single leading zero. This is fine as `digits`
+            // is sized with this in mind
+            self.i += 1;
+          } else {
+            // If this is outside our precision, we need to shift up by 1 as this is before the
+            // decimal yet we will drop this digit
+            self.exponent_correction += 1;
+            // If we're truncating '0', this is still precise due to correctly tweaking the
+            // exponent
+            self.imprecise |= c != b'0';
+          }
+        }
+
+        // separator, array closure, object closure, whitespace
+        // https://datatracker.ietf.org/doc/html/rfc8259#section-2
+        b',' | b']' | b'}' | b'\x20' | b'\x09' | b'\x0A' | b'\x0D' => return false,
+
+        b'.' => {
+          self.invalid |= !self.digits_in_current_part;
+          self.digits_in_current_part = false;
+          self.before_decimal = false;
+        }
+        b'e' | b'E' => {
+          self.invalid |= !self.digits_in_current_part;
+          // Allow the sign character immediately following the exponent
+          self.sign_character_allowed = true;
+          self.digits_in_current_part = false;
+          self.before_decimal = false;
+          self.before_exponent = false;
+        }
+
+        _ => self.invalid = true,
+      }
+      return true;
+    }
 
     if self.before_exponent {
       match c {
-        b'-' => {
-          if strict && (!sign_character_allowed) {
-            self.invalid = true;
-            return;
+        b'0' ..= b'9' => {
+          self.digits_in_current_part = true;
+
+          let within_precision = self.i != self.digits.len();
+          if within_precision {
+            // Write the digit
+            self.digits[self.i] = c;
+            // Only preserve it if it isn't a leading zero
+            let leading_zero =
+              (c == b'0') & ((self.i == 0) | ((self.i == 1) & (self.digits[0] == b'0')));
+            self.i += usize::from(!leading_zero);
+
+            // If this is after the decimal, but within precision, we need to shift down by 1
+            self.exponent_correction -= 1;
+          } else {
+            self.imprecise = true;
           }
-          self.negative = true;
         }
+
+        b',' | b']' | b'}' | b'\x20' | b'\x09' | b'\x0A' | b'\x0D' => return false,
+
+        // This block is duplicated with `before_decimal`
         b'e' | b'E' => {
-          // Only one 'e'/'E' is allowed, and this entire `match` statement is before it
-          // That leaves us solely to check the preceding part wasn't empty, as never allowed
-          if strict && (self.digits_in_current_part == 0) {
-            self.invalid = true;
-            return;
-          }
+          self.invalid |= !self.digits_in_current_part;
+          // Allow the sign character immediately following the exponent
           self.sign_character_allowed = true;
-          self.digits_in_current_part = 0;
+          self.digits_in_current_part = false;
+          self.before_decimal = false;
           self.before_exponent = false;
         }
-        b'0' ..= b'9' => {
-          // We do not allow leading zeroes for the integer part, unless it's solely zero
-          if strict && self.before_decimal && (self.digits_in_current_part == 1) && (self.i == 0) {
-            self.invalid = true;
-            return;
-          }
-          self.digits_in_current_part += 1;
 
-          // Drop leading zeroes
-          if (self.i == 0) && (c == b'0') {
-            // If we're after the decimal point, this effectively shifts the number up
-            if !self.before_decimal {
-              // Correct the exponent accordingly
-              self.exponent_correction -= 1;
-            }
-
-            return;
-          }
-          // If this outside of our supported significant digits, drop it
-          if self.i == self.digits.len() {
-            // If we're before the decimal, dropping this effectively shifts the number down
-            if self.before_decimal {
-              // Correct the exponent accordingly
-              self.exponent_correction += 1;
-            }
-            self.imprecise = true;
-            return;
-          }
-
-          // Write the digit
-          self.digits[self.i] = c;
-          self.i += 1;
-
-          // If we're after the decimal place, note this has to be shifted down a digit
-          if !self.before_decimal {
-            self.exponent_correction -= 1;
-          }
-        }
-        b'.' => {
-          // Only one '.' is allowed, and empty parts are never allowed
-          // It also must be before the exponent, yet this entire `match` statement is
-          if strict && ((!self.before_decimal) || (self.digits_in_current_part == 0)) {
-            self.invalid = true;
-            return;
-          }
-          self.digits_in_current_part = 0;
-          self.before_decimal = false;
-        }
-        _ => {
-          if strict {
-            self.invalid = true;
-            return;
-          }
-        }
+        _ => self.invalid = true,
       }
-      return;
+      return true;
     }
 
-    #[allow(clippy::needless_return)]
     match c {
-      b'-' => {
-        if strict && (!sign_character_allowed) {
-          self.invalid = true;
-          return;
-        }
-        self.negative_exponent = true;
-      }
-      // '+' is only allowed immediately after the exponent
-      b'+' => {
-        if strict && (!sign_character_allowed) {
-          self.invalid = true;
-          return;
-        }
-      }
       b'0' ..= b'9' => {
-        self.digits_in_current_part += 1;
+        self.digits_in_current_part = true;
         // Accumulate into our exponent
         self.absolute_exponent = self.absolute_exponent.and_then(|absolute_exponent| {
           let absolute_exponent = absolute_exponent.checked_mul(10)?;
           absolute_exponent.checked_add(i16::from(c - b'0'))
         });
       }
-      _ => {
-        if strict {
-          self.invalid = true;
-          return;
-        }
-      }
+
+      b',' | b']' | b'}' | b'\x20' | b'\x09' | b'\x0A' | b'\x0D' => return false,
+
+      _ => self.invalid = true,
     }
+
+    true
   }
 
   /// Get the significant digits, exponent for the number.
@@ -256,10 +260,10 @@ impl NumberSink {
 
     let mut significant_digits = self.i;
     // Normalize this number's negative exponent, as possible
-    while (significant_digits > 0) && (exponent < 0) {
-      if self.digits[significant_digits - 1] != b'0' {
-        break;
-      }
+    while (exponent < 0) &&
+      (significant_digits > 0) &&
+      (self.digits[significant_digits - 1] == b'0')
+    {
       significant_digits -= 1;
       exponent += 1;
     }
@@ -269,30 +273,17 @@ impl NumberSink {
   #[inline(always)]
   fn strictly_valid(&self) -> bool {
     // It has to not have been marked invalid and the last part must not have been empty
-    !(self.invalid || (self.digits_in_current_part == 0))
+    (!self.invalid) & self.digits_in_current_part
   }
 
   /// Extract the exact number as an integer, if possible.
   #[inline(always)]
   pub(crate) fn i64(&self) -> Option<i64> {
-    if !self.strictly_valid() {
-      None?;
-    }
-
     let (significant_digits, exponent) = self.significant_digits_and_exponent()?;
 
-    // If this number had a loss of precision, we should not return it here.
-    if self.imprecise {
-      None?;
-    }
-
-    // If this had no significant digits, it is zero
-    if significant_digits == 0 {
-      return Some(0);
-    }
-
+    // If this number had a loss of precision, we should not return it here
     // If this number has a negative exponent, it has a fractional part
-    if exponent < 0 {
+    if self.imprecise || (exponent < 0) {
       None?;
     }
 
@@ -303,15 +294,32 @@ impl NumberSink {
       the value might overflow.
     */
     let mut accum = 0i64;
-    for digit in self.digits.iter().take(significant_digits.min(18)) {
-      accum = accum.wrapping_mul(10);
-      let digit = i64::from(digit - b'0');
-      accum = accum.wrapping_add(if self.negative { -digit } else { digit });
-    }
-    for digit in &self.digits[18 .. significant_digits.max(18)] {
-      accum = accum.checked_mul(10)?;
-      let digit = i64::from(digit - b'0');
-      accum = accum.checked_add(if self.negative { -digit } else { digit })?;
+    if self.negative {
+      for digit in self.digits.iter().take(significant_digits.min(I64_SIGNIFICANT_DIGITS - 1)) {
+        accum = accum.wrapping_mul(10);
+        let digit = i64::from(digit - b'0');
+        accum = accum.wrapping_sub(digit);
+      }
+      for digit in &self.digits
+        [(I64_SIGNIFICANT_DIGITS - 1) .. significant_digits.max(I64_SIGNIFICANT_DIGITS - 1)]
+      {
+        accum = accum.checked_mul(10)?;
+        let digit = i64::from(digit - b'0');
+        accum = accum.checked_sub(digit)?;
+      }
+    } else {
+      for digit in self.digits.iter().take(significant_digits.min(I64_SIGNIFICANT_DIGITS - 1)) {
+        accum = accum.wrapping_mul(10);
+        let digit = i64::from(digit - b'0');
+        accum = accum.wrapping_add(digit);
+      }
+      for digit in &self.digits
+        [(I64_SIGNIFICANT_DIGITS - 1) .. significant_digits.max(I64_SIGNIFICANT_DIGITS - 1)]
+      {
+        accum = accum.checked_mul(10)?;
+        let digit = i64::from(digit - b'0');
+        accum = accum.checked_add(digit)?;
+      }
     }
 
     // Shift corresponding to the exponent
@@ -362,8 +370,11 @@ impl NumberSink {
       While we support `SIGNIFICANT_DIGITS` as necessary for exact conversions to integers, for
       floats (as assumed by this function), we only use the amount of significant digits Rust can
       accurately round-trip: `f64::DIGITS`.
+
+      We do add an additional significant digit if we have a leading zero present.
     */
-    let significant_digits = original_significant_digits.min(f64::DIGITS as usize);
+    let significant_digits =
+      original_significant_digits.min(usize::from(self.digits[0] == b'0') + (f64::DIGITS as usize));
     {
       // If we're truncating digits from the tail, shift the number back up accordingly
       // This is a safe cast so long as `|SIGNIFICANT_DIGITS - f64::DIGITS| < i64::MAX`.
@@ -371,8 +382,15 @@ impl NumberSink {
       let further_exponent_correction = (original_significant_digits - significant_digits) as i64;
       exponent = exponent.checked_add(further_exponent_correction)?;
     }
-    str[len .. (len + significant_digits)].copy_from_slice(&self.digits[.. significant_digits]);
-    len += significant_digits;
+    // If we have multiple significant digits, handle the leading zero (if present)
+    if (significant_digits > 1) && (self.digits[0] == b'0') {
+      str[len .. (len + significant_digits - 1)]
+        .copy_from_slice(&self.digits[1 .. significant_digits]);
+      len += significant_digits - 1;
+    } else {
+      str[len .. (len + significant_digits)].copy_from_slice(&self.digits[.. significant_digits]);
+      len += significant_digits;
+    }
 
     if exponent != 0 {
       // Set the exponent marker
@@ -397,10 +415,6 @@ impl NumberSink {
   /// capture the range of this value.
   #[inline(always)]
   pub(crate) fn f64(&self) -> Option<f64> {
-    if !self.strictly_valid() {
-      None?;
-    }
-
     let (str, len) = self.imprecise_str()?;
 
     /*
@@ -411,11 +425,7 @@ impl NumberSink {
     let str = core::str::from_utf8(&str[.. len]).ok()?;
     let candidate = f64::from_str(str).ok()?;
 
-    if !candidate.is_finite() {
-      None?;
-    }
-
-    Some(candidate)
+    candidate.is_finite().then_some(candidate)
   }
 }
 
@@ -423,8 +433,7 @@ impl Write for NumberSink {
   #[inline(always)]
   fn write_str(&mut self, s: &str) -> core::fmt::Result {
     for s in s.as_bytes() {
-      // Don't apply the validation rules, allowing accepting Rust's serializations
-      self.push_byte(false, *s);
+      self.push_byte(*s);
     }
     Ok(())
   }
@@ -438,20 +447,12 @@ pub(crate) fn to_number_str<'read, R: Read<'read>, S: Stack>(
   let mut result = NumberSink::new();
 
   // Read until a byte which isn't part of the number, sinking along the way
-  loop {
-    let char = reader.peek();
-    // separator, array closure, object closure, whitespace
-    // https://datatracker.ietf.org/doc/html/rfc8259#section-2
-    if matches!(char, b',' | b']' | b'}' | b'\x20' | b'\x09' | b'\x0A' | b'\x0D') {
-      break;
-    }
-    let char = reader.read_byte().map_err(|e| JsonError::ReadError(e))?;
-    // Do apply the RFC-8259 validation rules
-    result.push_byte(true, char);
+  while result.push_byte(reader.peek()) {
+    reader.read_byte().map_err(JsonError::ReadError)?;
   }
 
-  if result.invalid || (result.digits_in_current_part == 0) {
-    Err(JsonError::TypeError)?;
+  if !result.strictly_valid() {
+    Err(JsonError::InvalidValue)?;
   }
 
   Ok(Number(result))
