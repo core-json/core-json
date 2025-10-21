@@ -1,6 +1,6 @@
 [package]
 name = "core-json-embedded-io"
-version = "0.2.1"
+version = "0.4.0"
 description = "`embedded-io` support for `core-json`"
 license = "MIT"
 repository = "https://github.com/core-json/core-json/tree/main/embedded-io"
@@ -17,5 +17,5 @@ rustdoc-args = ["--cfg", "docsrs"]
 workspace = true
 
 [dependencies]
-core-json = { path = "../core", version = "0.2", default-features = false }
+core-json = { path = "../core", version = "0.4", default-features = false }
 embedded-io = { version = "0.7", default-features = false }

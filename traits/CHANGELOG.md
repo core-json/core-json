@@ -1,3 +1,8 @@
+# `core-json-traits 0.4.0`
+
+- Updates to `core-json 0.4.0`
+- [Add support for `()` as `null`](https://github.com/core-json/core-json/commit/3a49de5f80f800349b66124877d05e3bbce3ba21)
+
 # `core-json-traits 0.2.1`
 
 - [Update repository URLs](https://github.com/core-json/core-json/commit/da434e18e426fb5bd3abf7dffa1462011770379e)

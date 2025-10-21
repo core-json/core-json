@@ -1,3 +1,7 @@
+# `core-json-derive 0.4.0`
+
+- Updates to `core-json 0.4.0`
+
 # `core-json-derive 0.3.0`
 
 - [Update repository URLs](https://github.com/core-json/core-json/commit/da434e18e426fb5bd3abf7dffa1462011770379e)

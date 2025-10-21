@@ -1,3 +1,12 @@
+# `core-json 0.4.0`
+
+- [Deserialization performance](https://github.com/core-json/core-json/issues/7)
+- [Replace `BytesLike` with a more traditional `Read`](https://github.com/core-json/core-json/commit/1ac6bdb21fb1d99ff261cdc25322e6d3d64b274d)
+- [Rework the field iteration to enable `string2`](https://github.com/core-json/core-json/commit/82048b40092d32c477c5e57f25231d0aa10f0c84)
+- [Remove `as_null`, `as_bool`, for `to_null`, `to_bool`](https://github.com/core-json/core-json/commit/7e7781fff2f4f52c2aba5b932e0d0d8206f1bc77)
+- [Replace `is_*` functions with `kind`](https://github.com/core-json/core-json/commit/5320e59295b57350a7bd235b5328130314898334)
+- [Yield an error if we deserialized `(+/-)inf`](https://github.com/core-json/core-json/commit/58cc05d82768e048e14de530a0ffb93faa166b67)
+
 # `core-json 0.2.2`
 
 - [Remove functions accidentally marked `pub`](https://github.com/core-json/core-json/commit/0cc8bd0a98405c0ac4dd9b7a64f76f83ed507cb2)
