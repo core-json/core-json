@@ -85,9 +85,23 @@ fn parse_struct(object: TokenStream) -> Struct {
     }
   }
 
-  match object.next() {
-    Some(TokenTree::Ident(ident)) if ident.to_string() == "struct" => {}
-    _ => panic!("`JsonDeserialize` wasn't applied to a `struct`"),
+  {
+    let mut vis = false;
+    loop {
+      match object.next() {
+        // Skip visibility modifiers
+        Some(TokenTree::Ident(ident)) if ident.to_string() == "pub" => {
+          if vis {
+            panic!("multiple visibility modifers found");
+          }
+          vis = true;
+        }
+        // This _technically_ allows multiple/invalid arguments re: visibility
+        Some(TokenTree::Group(group)) if vis && (group.delimiter() == Delimiter::Parenthesis) => {}
+        Some(TokenTree::Ident(ident)) if ident.to_string() == "struct" => break,
+        _ => panic!("`JsonDeserialize` wasn't applied to a `struct`"),
+      }
+    }
   }
   let name = match object.next() {
     Some(TokenTree::Ident(ident)) => ident.to_string(),

@@ -2,7 +2,9 @@ use core_json_traits::{JsonF64, JsonDeserialize, JsonSerialize};
 use core_json_derive::{JsonDeserialize, JsonSerialize};
 
 #[derive(Clone, Debug, Default, JsonDeserialize, JsonSerialize)]
-struct MyStruct<T: 'static + core::fmt::Debug + Default + JsonDeserialize + JsonSerialize> {
+pub(crate) struct MyStruct<
+  T: 'static + core::fmt::Debug + Default + JsonDeserialize + JsonSerialize,
+> {
   pub abc: u64,
   de: u8,
   pub(crate) ghij: Vec<u8>,
@@ -29,7 +31,7 @@ where
 }
 
 #[derive(Clone, PartialEq, Debug, Default, JsonDeserialize, JsonSerialize)]
-struct WithoutT {
+pub struct WithoutT {
   #[key("xyza")]
   abc: i64,
   de: u8,
