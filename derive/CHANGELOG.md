@@ -1,3 +1,7 @@
+# `core-json-derive 0.4.1`
+
+- [Fix deriving for `struct`s with visibility modifiers](https://github.com/core-json/core-json/commit/cae310a307228d03e151c2f05250432cf1e460e5)
+
 # `core-json-derive 0.4.0`
 
 - Updates to `core-json 0.4.0`
