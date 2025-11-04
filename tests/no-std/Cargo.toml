@@ -6,7 +6,7 @@ license = "MIT"
 repository = "https://github.com/core-json/core-json/tree/main/tests/no-std"
 authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 keywords = ["nostd", "no_std", "alloc"]
-edition = "2021"
+edition = "2024"
 publish = false
 rust-version = "1.89"
 

@@ -279,7 +279,7 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> ArrayIterator<'read, 'parent, R, 
       };
       match result {
         SingleStepArrayResult::Value => {
-          break Some(Ok(Value { deserializer: Some(self.deserializer) }))
+          break Some(Ok(Value { deserializer: Some(self.deserializer) }));
         }
         SingleStepArrayResult::Closed => {
           self.done = true;
