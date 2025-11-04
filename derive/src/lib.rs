@@ -16,6 +16,10 @@ use alloc::{
 extern crate proc_macro;
 use proc_macro::{Delimiter, Spacing, Punct, TokenTree, TokenStream};
 
+mod vis;
+use vis::parse_optional_visibility;
+pub(crate) mod simple_path;
+
 // `<` will not open a group, so we use this to take all items within a `< ... >` expression.
 fn take_angle_expression(
   iter: &mut Peekable<impl Iterator<Item: Borrow<TokenTree>>>,
@@ -50,7 +54,7 @@ fn take_angle_expression(
 }
 
 // Advance the iterator past the next `,` on this depth, if there is one.
-fn skip_comma_delimited(iter: &mut Peekable<impl Iterator<Item: Borrow<TokenTree>>>) {
+fn parse_comma_delimited(iter: &mut Peekable<impl Iterator<Item: Borrow<TokenTree>>>) {
   loop {
     take_angle_expression(iter);
     let Some(item) = iter.next() else { return };
@@ -73,6 +77,7 @@ struct Struct {
 fn parse_struct(object: TokenStream) -> Struct {
   let mut object = object.into_iter().peekable();
 
+  // Handle attributes applied to the `struct`
   loop {
     match object.peek() {
       Some(TokenTree::Punct(punct)) if punct.as_char() == '#' => {
@@ -85,23 +90,9 @@ fn parse_struct(object: TokenStream) -> Struct {
     }
   }
 
-  {
-    let mut vis = false;
-    loop {
-      match object.next() {
-        // Skip visibility modifiers
-        Some(TokenTree::Ident(ident)) if ident.to_string() == "pub" => {
-          if vis {
-            panic!("multiple visibility modifers found");
-          }
-          vis = true;
-        }
-        // This _technically_ allows multiple/invalid arguments re: visibility
-        Some(TokenTree::Group(group)) if vis && (group.delimiter() == Delimiter::Parenthesis) => {}
-        Some(TokenTree::Ident(ident)) if ident.to_string() == "struct" => break,
-        _ => panic!("`JsonDeserialize` wasn't applied to a `struct`"),
-      }
-    }
+  parse_optional_visibility(&mut object);
+  if !matches!(object.next(), Some(TokenTree::Ident(ident)) if ident.to_string() == "struct") {
+    panic!("`JsonDeserialize` wasn't applied to a `struct`");
   }
   let name = match object.next() {
     Some(TokenTree::Ident(ident)) => ident.to_string(),
@@ -118,7 +109,7 @@ fn parse_struct(object: TokenStream) -> Struct {
       if let TokenTree::Punct(punct) = &component {
         if punct.as_char() == ':' {
           // Skip the actual bounds
-          skip_comma_delimited(&mut iter);
+          parse_comma_delimited(&mut iter);
           // Add our own comma delimiter and move to the next item
           generics_tree.push(TokenTree::Punct(Punct::new(',', Spacing::Alone)));
           continue;
@@ -157,10 +148,14 @@ fn parse_struct(object: TokenStream) -> Struct {
     let mut serialization_field_name = None;
     let mut field_name = None;
     let mut skip = false;
-    for item in &mut struct_body {
-      // Handle the `key` attribute
-      if let TokenTree::Group(group) = &item {
-        if group.delimiter() == Delimiter::Bracket {
+    while let Some(item) = {
+      // Skip past the visibility declaration applied to fields
+      parse_optional_visibility(&mut struct_body);
+      struct_body.next()
+    } {
+      match &item {
+        // Handle attributes
+        TokenTree::Group(group) if group.delimiter() == Delimiter::Bracket => {
           let mut iter = group.stream().into_iter();
           let ident = iter.next().and_then(|ident| match ident {
             TokenTree::Ident(ident) => Some(ident.to_string()),
@@ -195,18 +190,16 @@ fn parse_struct(object: TokenStream) -> Struct {
             _ => {}
           }
         }
-      }
 
-      if let TokenTree::Ident(ident) = item {
-        let ident = ident.to_string();
-        // Skip the access modifier
-        if ident == "pub" {
-          continue;
+        TokenTree::Ident(ident) => {
+          let ident = ident.to_string();
+          field_name = Some(ident);
+          // Use the field's actual name within the serialization, if not renamed
+          serialization_field_name = serialization_field_name.or(field_name.clone());
+          break;
         }
-        field_name = Some(ident);
-        // Use the field's actual name within the serialization, if not renamed
-        serialization_field_name = serialization_field_name.or(field_name.clone());
-        break;
+
+        _ => {}
       }
     }
     let field_name = field_name.expect("couldn't find the name of the field within the `struct`");
@@ -218,7 +211,7 @@ fn parse_struct(object: TokenStream) -> Struct {
     }
 
     // Advance to the next field
-    skip_comma_delimited(&mut struct_body);
+    parse_comma_delimited(&mut struct_body);
   }
 
   Struct { generic_bounds, generics, name, fields }
