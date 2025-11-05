@@ -19,7 +19,10 @@ use proc_macro::{Delimiter, Spacing, Punct, TokenTree, TokenStream};
 pub(crate) mod identifier;
 pub(crate) mod simple_path;
 mod vis;
+mod r#struct;
+
 use vis::parse_optional_visibility;
+use r#struct::parse_struct_fields;
 
 // `<` will not open a group, so we use this to take all items within a `< ... >` expression.
 fn take_angle_expression(
@@ -71,7 +74,7 @@ struct Struct {
   generic_bounds: String,
   generics: String,
   name: String,
-  fields: Vec<(String, String)>,
+  fields: Vec<(TokenStream, String)>,
 }
 
 // This is somewhat comparable to `syn::Generics`, especially its `split_for_impl` method.
@@ -142,77 +145,52 @@ fn parse_struct(object: TokenStream) -> Struct {
 
   let mut fields = vec![];
 
-  let mut struct_body = struct_body.stream().into_iter().peekable();
   // Read each field within this `struct`'s body
-  while struct_body.peek().is_some() {
-    // Access the field name
+  for field in parse_struct_fields(&mut struct_body.stream().into_iter().peekable()) {
     let mut serialization_field_name = None;
-    let mut field_name = None;
     let mut skip = false;
-    while let Some(item) = {
-      // Skip past the visibility declaration applied to fields
-      parse_optional_visibility(&mut struct_body);
-      struct_body.next()
-    } {
-      match &item {
-        // Handle attributes
-        TokenTree::Group(group) if group.delimiter() == Delimiter::Bracket => {
-          let mut iter = group.stream().into_iter();
-          let ident = iter.next().and_then(|ident| match ident {
-            TokenTree::Ident(ident) => Some(ident.to_string()),
-            _ => None,
-          });
-          match ident.as_deref() {
-            Some("skip") => skip = true,
-            Some("key") => {
-              let TokenTree::Group(group) = iter.next().expect("`key` attribute without arguments")
-              else {
-                panic!("`key` attribute not followed with `(...)`")
-              };
-              assert_eq!(
-                group.delimiter(),
-                Delimiter::Parenthesis,
-                "`key` attribute with a non-parentheses group"
-              );
-              assert_eq!(
-                group.stream().into_iter().count(),
-                1,
-                "`key` attribute with multiple tokens within parentheses"
-              );
-              let TokenTree::Literal(literal) = group.stream().into_iter().next().unwrap() else {
-                panic!("`key` attribute with a non-literal argument")
-              };
-              let literal = literal.to_string();
-              assert_eq!(literal.chars().next().unwrap(), '"', "literal wasn't a string literal");
-              assert_eq!(literal.chars().last().unwrap(), '"', "literal wasn't a string literal");
-              serialization_field_name =
-                Some(literal.trim_start_matches('"').trim_end_matches('"').to_string());
-            }
-            _ => {}
-          }
-        }
 
-        TokenTree::Ident(ident) => {
-          let ident = ident.to_string();
-          field_name = Some(ident);
-          // Use the field's actual name within the serialization, if not renamed
-          serialization_field_name = serialization_field_name.or(field_name.clone());
-          break;
+    for attribute in field.attributes {
+      let mut iter = attribute.into_iter();
+      let ident = iter.next().and_then(|ident| match ident {
+        TokenTree::Ident(ident) => Some(ident.to_string()),
+        _ => None,
+      });
+      match ident.as_deref() {
+        Some("skip") => skip = true,
+        Some("key") => {
+          let TokenTree::Group(group) = iter.next().expect("`key` attribute without arguments")
+          else {
+            panic!("`key` attribute not followed with `(...)`")
+          };
+          assert_eq!(
+            group.delimiter(),
+            Delimiter::Parenthesis,
+            "`key` attribute with a non-parentheses group"
+          );
+          assert_eq!(
+            group.stream().into_iter().count(),
+            1,
+            "`key` attribute with multiple tokens within parentheses"
+          );
+          let TokenTree::Literal(literal) = group.stream().into_iter().next().unwrap() else {
+            panic!("`key` attribute with a non-literal argument")
+          };
+          let literal = literal.to_string();
+          assert_eq!(literal.chars().next().unwrap(), '"', "literal wasn't a string literal");
+          assert_eq!(literal.chars().last().unwrap(), '"', "literal wasn't a string literal");
+          serialization_field_name =
+            Some(literal.trim_start_matches('"').trim_end_matches('"').to_string());
         }
-
         _ => {}
       }
     }
-    let field_name = field_name.expect("couldn't find the name of the field within the `struct`");
-    let serialization_field_name =
-      serialization_field_name.expect("`field_name` but no `serialization_field_name`?");
+
+    let serialization_field_name = serialization_field_name.unwrap_or(field.identifier.ident());
 
     if !skip {
-      fields.push((field_name, serialization_field_name));
+      fields.push((field.identifier.stream(), serialization_field_name));
     }
-
-    // Advance to the next field
-    parse_comma_delimited(&mut struct_body);
   }
 
   Struct { generic_bounds, generics, name, fields }

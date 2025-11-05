@@ -1,7 +1,7 @@
 use core::iter::Peekable;
 use alloc::string::ToString;
 
-use proc_macro::{Spacing, Ident, TokenTree, TokenStream};
+use proc_macro::{Spacing, TokenTree, TokenStream};
 
 /// Parse `::`, if present.
 ///
@@ -35,13 +35,13 @@ fn parse_optional_pair_of_colons(
 ///
 /// This follows the syntax from
 /// <https://doc.rust-lang.org/1.91.0/reference/paths.html#grammar-SimplePathSegment>.
-fn parse_simple_path_segment(iter: &mut Peekable<impl Iterator<Item = TokenTree>>) -> Ident {
+fn parse_simple_path_segment(iter: &mut Peekable<impl Iterator<Item = TokenTree>>) -> TokenStream {
   let Some(TokenTree::Ident(ident)) = iter.next() else { panic!("invalid `SinglePathSegment`") };
   // TODO: This will not actually capture `$crate`
   if matches!(ident.to_string().as_str(), "super" | "self" | "crate" | "$crate") {
-    return ident;
+    return TokenStream::from_iter([TokenTree::Ident(ident)]);
   }
-  crate::identifier::parse_identifier(iter)
+  crate::identifier::Identifier::parse(iter).stream()
 }
 
 /// Parse a present `SimplePath`, returning it.
@@ -53,12 +53,12 @@ pub(crate) fn parse_simple_path(
 ) -> TokenStream {
   let mut stream = parse_optional_pair_of_colons(iter);
   let first_path = parse_simple_path_segment(iter);
-  stream.extend([TokenTree::Ident(first_path)]);
+  stream.extend(first_path);
   while iter.peek().is_some() {
     let colons = parse_optional_pair_of_colons(iter);
     assert!(!colons.is_empty(), "missing pair of colons between path segments");
     stream.extend([colons]);
-    stream.extend([TokenTree::Ident(parse_simple_path_segment(iter))]);
+    stream.extend(parse_simple_path_segment(iter));
   }
   stream
 }
