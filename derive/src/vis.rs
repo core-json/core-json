@@ -8,8 +8,8 @@ use proc_macro::{Delimiter, TokenTree, TokenStream};
 ///
 /// This follows the syntax from
 /// <https://doc.rust-lang.org/1.91.0/reference/paths.html#grammar-SimplePath>, with the Rust 2015
-/// edition rules (a superset of the 2018 rules, which restricted what paths could be used in this
-/// context).
+/// edition rules for when within a `Visibility` (a superset of the 2018 rules, which restricted
+/// what paths could be used in this context).
 fn parse_simple_path_in_vis(iter: &mut Peekable<impl Iterator<Item = TokenTree>>) {
   let _path = crate::simple_path::parse_simple_path(iter);
   /*
@@ -29,7 +29,7 @@ fn parse_simple_path_in_vis(iter: &mut Peekable<impl Iterator<Item = TokenTree>>
 /// Parse an optionally-present `Visibility`, returning it.
 ///
 /// This follows the syntax from
-/// <https://doc.rust-lang.org/1.91.0/reference/visibility-and-privacy.html>.
+/// <https://doc.rust-lang.org/1.91.0/reference/visibility-and-privacy.html#grammar-Visibility>.
 pub(crate) fn parse_optional_visibility(
   iter: &mut Peekable<impl Iterator<Item = TokenTree>>,
 ) -> TokenStream {

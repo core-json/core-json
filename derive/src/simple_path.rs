@@ -1,4 +1,5 @@
 use core::iter::Peekable;
+use alloc::string::ToString;
 
 use proc_macro::{Spacing, Ident, TokenTree, TokenStream};
 
@@ -33,11 +34,14 @@ fn parse_optional_pair_of_colons(
 /// Parse a present `SimplePathSegment`.
 ///
 /// This follows the syntax from
-/// <https://doc.rust-lang.org/1.91.0/reference/paths.html#grammar-SimplePath>.
+/// <https://doc.rust-lang.org/1.91.0/reference/paths.html#grammar-SimplePathSegment>.
 fn parse_simple_path_segment(iter: &mut Peekable<impl Iterator<Item = TokenTree>>) -> Ident {
-  // A `SimplePathSegment` is an identifier OR a keyword, both represented by `TokenTree::Ident`
   let Some(TokenTree::Ident(ident)) = iter.next() else { panic!("invalid `SinglePathSegment`") };
-  ident
+  // TODO: This will not actually capture `$crate`
+  if matches!(ident.to_string().as_str(), "super" | "self" | "crate" | "$crate") {
+    return ident;
+  }
+  crate::identifier::parse_identifier(iter)
 }
 
 /// Parse a present `SimplePath`, returning it.

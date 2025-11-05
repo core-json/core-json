@@ -16,9 +16,10 @@ use alloc::{
 extern crate proc_macro;
 use proc_macro::{Delimiter, Spacing, Punct, TokenTree, TokenStream};
 
+pub(crate) mod identifier;
+pub(crate) mod simple_path;
 mod vis;
 use vis::parse_optional_visibility;
-pub(crate) mod simple_path;
 
 // `<` will not open a group, so we use this to take all items within a `< ... >` expression.
 fn take_angle_expression(
