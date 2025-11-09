@@ -305,15 +305,12 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
   /// If a field is present multiple times, this will yield each instance.
   #[inline(always)]
   pub fn fields(mut self) -> Result<FieldIterator<'read, 'parent, R, S>, JsonError<'read, R, S>> {
-    if !matches!(self.kind()?, Type::Object) {
-      Err(JsonError::TypeError)?
-    }
-
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
     match deserializer.single_step()? {
       SingleStepResult::Unknown(SingleStepUnknownResult::ObjectOpened) => {
         Ok(FieldIterator { deserializer, done: false })
       }
+      SingleStepResult::Unknown(_) => Err(JsonError::TypeError)?,
       _ => Err(JsonError::InternalError),
     }
   }
@@ -321,15 +318,12 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
   /// Iterate over all items within this container.
   #[inline(always)]
   pub fn iterate(mut self) -> Result<ArrayIterator<'read, 'parent, R, S>, JsonError<'read, R, S>> {
-    if !matches!(self.kind()?, Type::Array) {
-      Err(JsonError::TypeError)?
-    }
-
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
     match deserializer.single_step()? {
       SingleStepResult::Unknown(SingleStepUnknownResult::ArrayOpened) => {
         Ok(ArrayIterator { deserializer, done: false })
       }
+      SingleStepResult::Unknown(_) => Err(JsonError::TypeError)?,
       _ => Err(JsonError::InternalError),
     }
   }
@@ -352,15 +346,12 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
     impl use<'read, 'parent, R, S> + Iterator<Item = Result<char, JsonError<'read, R, S>>>,
     JsonError<'read, R, S>,
   > {
-    if !matches!(self.kind()?, Type::String) {
-      Err(JsonError::TypeError)?
-    }
-
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
     match deserializer.single_step()? {
       SingleStepResult::Unknown(SingleStepUnknownResult::String) => {
         Ok(handle_string_value(deserializer))
       }
+      SingleStepResult::Unknown(_) => Err(JsonError::TypeError)?,
       _ => Err(JsonError::InternalError),
     }
   }
@@ -368,13 +359,10 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
   /// Get the current item as a number.
   #[inline(always)]
   pub fn to_number(mut self) -> Result<Number, JsonError<'read, R, S>> {
-    if !matches!(self.kind()?, Type::Number) {
-      Err(JsonError::TypeError)?
-    }
-
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
     match deserializer.single_step()? {
       SingleStepResult::Unknown(SingleStepUnknownResult::Number(number)) => Ok(number),
+      SingleStepResult::Unknown(_) => Err(JsonError::TypeError)?,
       _ => Err(JsonError::InternalError),
     }
   }
@@ -382,13 +370,10 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
   /// Get the current item as a `bool`.
   #[inline(always)]
   pub fn to_bool(mut self) -> Result<bool, JsonError<'read, R, S>> {
-    if !matches!(self.kind()?, Type::Bool) {
-      Err(JsonError::TypeError)?
-    }
-
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
     match deserializer.single_step()? {
       SingleStepResult::Unknown(SingleStepUnknownResult::Bool(bool)) => Ok(bool),
+      SingleStepResult::Unknown(_) => Err(JsonError::TypeError)?,
       _ => Err(JsonError::InternalError),
     }
   }
@@ -399,13 +384,10 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
   /// caller if it's a valid value, it will be `null`.
   #[inline(always)]
   pub fn to_null(mut self) -> Result<(), JsonError<'read, R, S>> {
-    if !matches!(self.kind()?, Type::Null) {
-      Err(JsonError::TypeError)?
-    }
-
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
     match deserializer.single_step()? {
       SingleStepResult::Unknown(SingleStepUnknownResult::Null) => Ok(()),
+      SingleStepResult::Unknown(_) => Err(JsonError::TypeError)?,
       _ => Err(JsonError::InternalError),
     }
   }
