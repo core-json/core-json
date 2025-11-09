@@ -15,9 +15,9 @@ pub enum State {
 }
 
 /// A trait representing a stack.
-pub trait Stack: Debug {
+pub trait Stack: Send + Sync + Debug {
   /// This stack's error type.
-  type Error: Sized + Copy + Debug;
+  type Error: Sized + Send + Sync + Copy + Debug;
 
   /// Create an empty stack.
   fn empty() -> Self;

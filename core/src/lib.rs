@@ -14,19 +14,22 @@ mod string;
 mod number;
 mod deserializer;
 
-pub use io::Read;
+pub use io::{Read, AsyncRead};
 #[cfg(feature = "std")]
 pub use io::ReadAdapter;
 use io::PeekableRead;
 pub use stack::*;
-use string::*;
+use string::{String as InternalInternalString, StringKey, StringValue};
 pub use number::{NumberSink, Number};
-pub use deserializer::{Deserializer, Value};
+pub use deserializer::{AsyncDeserializer, AsyncValue};
 use deserializer::*;
+
+mod sync;
+pub use sync::*;
 
 /// An error incurred when deserializing.
 #[derive(Debug)]
-pub enum JsonError<'read, R: Read<'read>, S: Stack> {
+pub enum JsonError<'read, R: AsyncRead<'read>, S: Stack> {
   /// An unexpected state was reached during deserialization.
   InternalError,
   /// An error from the reader.
@@ -50,17 +53,17 @@ pub enum JsonError<'read, R: Read<'read>, S: Stack> {
   /// Operation could not be performed given the value's type.
   TypeError,
 }
-impl<'read, R: Read<'read>, S: Stack> Clone for JsonError<'read, R, S> {
+impl<'read, R: AsyncRead<'read>, S: Stack> Clone for JsonError<'read, R, S> {
   #[inline(always)]
   fn clone(&self) -> Self {
     *self
   }
 }
-impl<'read, R: Read<'read>, S: Stack> Copy for JsonError<'read, R, S> {}
+impl<'read, R: AsyncRead<'read>, S: Stack> Copy for JsonError<'read, R, S> {}
 
 /// The type of the value.
 ///
-/// https://datatracker.ietf.org/doc/html/rfc8259#section-3 defines all possible values.
+/// <https://datatracker.ietf.org/doc/html/rfc8259#section-3> defines all possible values.
 pub enum Type {
   /// An object.
   Object,
@@ -81,7 +84,7 @@ pub enum Type {
 /// This does not assert it's a valid instance of this class of items. It solely asserts if this
 /// is a valid item, it will be of this type.
 #[inline(always)]
-fn kind<'read, R: Read<'read>>(reader: &PeekableRead<'read, R>) -> Type {
+fn kind<'read, R: AsyncRead<'read>>(reader: &PeekableRead<'read, R>) -> Type {
   match reader.peek() {
     b'{' => Type::Object,
     b'[' => Type::Array,
@@ -93,7 +96,7 @@ fn kind<'read, R: Read<'read>>(reader: &PeekableRead<'read, R>) -> Type {
 }
 
 /// A field within an object.
-pub struct Field<'read, 'parent, R: Read<'read>, S: Stack> {
+pub struct AsyncField<'read, 'parent, R: AsyncRead<'read>, S: Stack> {
   key: Option<StringKey<'read, 'parent, R, S>>,
 }
 
@@ -105,10 +108,10 @@ pub struct Field<'read, 'parent, R: Read<'read>, S: Stack> {
 /// `SingleStepObjectResult` to consume the parent's borrow for the rest of its lifetime, when we
 /// only want to consume it upon `SingleStepObjectResult::Field`.
 #[inline(always)]
-fn handle_field<'read, 'parent, R: Read<'read>, S: Stack>(
-  deserializer: &'parent mut Deserializer<'read, R, S>,
-) -> Field<'read, 'parent, R, S> {
-  Field { key: Some(StringKey(String::read(deserializer))) }
+fn handle_field<'read, 'parent, R: AsyncRead<'read>, S: Stack>(
+  deserializer: &'parent mut AsyncDeserializer<'read, R, S>,
+) -> AsyncField<'read, 'parent, R, S> {
+  AsyncField { key: Some(StringKey(InternalInternalString::read(deserializer))) }
 }
 
 /// Handle a string value.
@@ -119,59 +122,74 @@ fn handle_field<'read, 'parent, R: Read<'read>, S: Stack>(
 /// `SingleStepUnknownResult` to consume the parent's borrow for the rest of its lifetime, when we
 /// only want to consume it upon `SingleStepUnknownResult::String`.
 #[inline(always)]
-fn handle_string_value<'read, 'parent, R: Read<'read>, S: Stack>(
-  deserializer: &'parent mut Deserializer<'read, R, S>,
+fn handle_string_value<'read, 'parent, R: AsyncRead<'read>, S: Stack>(
+  deserializer: &'parent mut AsyncDeserializer<'read, R, S>,
 ) -> StringValue<'read, 'parent, R, S> {
-  StringValue(String::read(deserializer))
+  StringValue(InternalInternalString::read(deserializer))
 }
 
-impl<'read, 'parent, R: Read<'read>, S: Stack> Field<'read, 'parent, R, S> {
-  /// Access the iterator for the string used as the field's key.
+/// A view of a string.
+///
+/// As we cannot perform allocations, we do not yield a [`alloc::string::String`] but rather an
+/// iterator for the contents of the serialized string (with its escape sequences handled).
+///
+/// RFC 8259 allows strings to specify invalid UTF-8 codepoints. This library supports working
+/// with such values, as required to be compliant with RFC 8259, but this function's return value
+/// will error when attempting to return a non-UTF-8 value. If the underlying JSON is valid, the
+/// deserializer will remain usable afterwards however, even though the rest of the non-UTF-8
+/// string will be inaccesible.
+pub struct AsyncString<'read, 'parent, R: AsyncRead<'read>, S: Stack>(
+  StringValue<'read, 'parent, R, S>,
+);
+impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> AsyncString<'read, 'parent, R, S> {
+  /// The next character within the string.
+  #[inline(always)]
+  pub async fn next(&mut self) -> Option<Result<char, JsonError<'read, R, S>>> {
+    self.0.0.next().await
+  }
+}
+
+impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> AsyncField<'read, 'parent, R, S> {
+  /// Access the next character within the key.
   ///
-  /// The iterator will yield the individual characters within the string represented by the JSON
-  /// serialization, with all escape sequences handled.
-  ///
-  /// If the JSON underlying is invalid, the iterator will error, and while `Field::value` may
-  /// still be called, all further attempted accesses will yield an error.
-  ///
-  /// If the JSON underlying is valid yet does not represent a valid UTF-8 sequence, the iterator
-  /// will error, yet `Field::value` may still be called and deserialization may continue. The rest
-  /// of the key will not be accessible however.
+  /// If the key has valid syntax under JSON, yet does not represent a valid UTF-8 sequence,
+  /// `AsyncField::value` may still be called and deserialization may continue, even though this
+  /// may error midway through the JSON-encoded string.
   #[allow(clippy::type_complexity)]
   #[inline(always)]
-  pub fn key(
-    &mut self,
-  ) -> Result<
-    &mut (impl use<'read, 'parent, R, S> + Iterator<Item = Result<char, JsonError<'read, R, S>>>),
-    JsonError<'read, R, S>,
-  > {
-    self.key.as_mut().ok_or(JsonError::InternalError)
+  pub async fn next_char_in_key(&mut self) -> Option<Result<char, JsonError<'read, R, S>>> {
+    match self.key.as_mut().ok_or(JsonError::InternalError) {
+      Ok(value) => value.0.next().await,
+      Err(e) => Some(Err(e)),
+    }
   }
 
   /// Access the field's value.
   #[inline(always)]
-  pub fn value(mut self) -> Result<Value<'read, 'parent, R, S>, JsonError<'read, R, S>> {
-    Ok(Value { deserializer: Some(self.key.take().ok_or(JsonError::InternalError)?.drop()) })
+  pub fn value(mut self) -> Result<AsyncValue<'read, 'parent, R, S>, JsonError<'read, R, S>> {
+    Ok(AsyncValue { deserializer: Some(self.key.take().ok_or(JsonError::InternalError)?.drop()) })
   }
 }
 
-impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for Field<'read, 'parent, R, S> {
+impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> Drop for AsyncField<'read, 'parent, R, S> {
   #[inline(always)]
   fn drop(&mut self) {
     if let Some(key) = self.key.take() {
-      drop(Value { deserializer: Some(key.drop()) });
+      drop(AsyncValue { deserializer: Some(key.drop()) });
     }
   }
 }
 
 /// An iterator over fields.
-pub struct FieldIterator<'read, 'parent, R: Read<'read>, S: Stack> {
-  deserializer: &'parent mut Deserializer<'read, R, S>,
+pub struct AsyncFieldIterator<'read, 'parent, R: AsyncRead<'read>, S: Stack> {
+  deserializer: &'parent mut AsyncDeserializer<'read, R, S>,
   done: bool,
 }
 
 // When this object is dropped, advance the decoder past the unread items
-impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for FieldIterator<'read, 'parent, R, S> {
+impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> Drop
+  for AsyncFieldIterator<'read, 'parent, R, S>
+{
   #[inline(always)]
   fn drop(&mut self) {
     if !self.done {
@@ -180,7 +198,7 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for FieldIterator<'read, 'pa
   }
 }
 
-impl<'read, 'parent, R: Read<'read>, S: Stack> FieldIterator<'read, 'parent, R, S> {
+impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> AsyncFieldIterator<'read, 'parent, R, S> {
   /// The next field within the object.
   ///
   /// This is approximate to `Iterator::next` yet each item maintains a mutable reference to the
@@ -193,13 +211,15 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> FieldIterator<'read, 'parent, R, 
   /// itself as a complete solution. Please refer to it if you have difficulties calling this
   /// method for context.
   #[allow(clippy::type_complexity, clippy::should_implement_trait)]
-  pub fn next(&mut self) -> Option<Result<Field<'read, '_, R, S>, JsonError<'read, R, S>>> {
+  pub async fn next(
+    &mut self,
+  ) -> Option<Result<AsyncField<'read, '_, R, S>, JsonError<'read, R, S>>> {
     if self.done {
       None?;
     }
 
     loop {
-      let result = match self.deserializer.single_step() {
+      let result = match self.deserializer.single_step().await {
         Ok(SingleStepResult::Object(result)) => result,
         Ok(_) => break Some(Err(JsonError::InternalError)),
         Err(e) => break Some(Err(e)),
@@ -216,13 +236,15 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> FieldIterator<'read, 'parent, R, 
 }
 
 /// An iterator over an array.
-pub struct ArrayIterator<'read, 'parent, R: Read<'read>, S: Stack> {
-  deserializer: &'parent mut Deserializer<'read, R, S>,
+pub struct AsyncArrayIterator<'read, 'parent, R: AsyncRead<'read>, S: Stack> {
+  deserializer: &'parent mut AsyncDeserializer<'read, R, S>,
   done: bool,
 }
 
 // When this array is dropped, advance the decoder past the unread items
-impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for ArrayIterator<'read, 'parent, R, S> {
+impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> Drop
+  for AsyncArrayIterator<'read, 'parent, R, S>
+{
   #[inline(always)]
   fn drop(&mut self) {
     if !self.done {
@@ -231,7 +253,7 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for ArrayIterator<'read, 'pa
   }
 }
 
-impl<'read, 'parent, R: Read<'read>, S: Stack> ArrayIterator<'read, 'parent, R, S> {
+impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> AsyncArrayIterator<'read, 'parent, R, S> {
   /// The next item within the array.
   ///
   /// This is approximate to `Iterator::next` yet each item maintains a mutable reference to the
@@ -244,20 +266,22 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> ArrayIterator<'read, 'parent, R, 
   /// itself as a complete solution. Please refer to it if you have difficulties calling this
   /// method for context.
   #[allow(clippy::should_implement_trait)]
-  pub fn next(&mut self) -> Option<Result<Value<'read, '_, R, S>, JsonError<'read, R, S>>> {
+  pub async fn next(
+    &mut self,
+  ) -> Option<Result<AsyncValue<'read, '_, R, S>, JsonError<'read, R, S>>> {
     if self.done {
       None?;
     }
 
     loop {
-      let result = match self.deserializer.single_step() {
+      let result = match self.deserializer.single_step().await {
         Ok(SingleStepResult::Array(result)) => result,
         Ok(_) => break Some(Err(JsonError::InternalError)),
         Err(e) => break Some(Err(e)),
       };
       match result {
         SingleStepArrayResult::Value => {
-          break Some(Ok(Value { deserializer: Some(self.deserializer) }));
+          break Some(Ok(AsyncValue { deserializer: Some(self.deserializer) }));
         }
         SingleStepArrayResult::Closed => {
           self.done = true;
@@ -268,15 +292,21 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> ArrayIterator<'read, 'parent, R, 
   }
 }
 
-impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
+impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> AsyncValue<'read, 'parent, R, S> {
   /// Get the type of the current item.
   ///
   /// This does not assert it's a valid instance of this class of items. It solely asserts if this
   /// is a valid item, it will be of this type.
   #[inline(always)]
-  pub fn kind(&mut self) -> Result<Type, JsonError<'read, R, S>> {
+  pub async fn kind(&mut self) -> Result<Type, JsonError<'read, R, S>> {
     let deserializer = self.deserializer.as_mut().ok_or(JsonError::InternalError)?;
-    DelayedDrop::drop(deserializer)?;
+    match DelayedDrop::drop(deserializer).await {
+      Ok(()) => {}
+      Err(e) => {
+        deserializer.poison(e);
+        Err(e)?
+      }
+    }
     Ok(kind(&deserializer.reader))
   }
 
@@ -284,11 +314,13 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
   ///
   /// If a field is present multiple times, this will yield each instance.
   #[inline(always)]
-  pub fn fields(mut self) -> Result<FieldIterator<'read, 'parent, R, S>, JsonError<'read, R, S>> {
+  pub async fn fields(
+    mut self,
+  ) -> Result<AsyncFieldIterator<'read, 'parent, R, S>, JsonError<'read, R, S>> {
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
-    match deserializer.single_step()? {
+    match deserializer.single_step().await? {
       SingleStepResult::Unknown(SingleStepUnknownResult::ObjectOpened) => {
-        Ok(FieldIterator { deserializer, done: false })
+        Ok(AsyncFieldIterator { deserializer, done: false })
       }
       SingleStepResult::Unknown(_) => Err(JsonError::TypeError)?,
       _ => Err(JsonError::InternalError),
@@ -297,39 +329,28 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
 
   /// Iterate over all items within this container.
   #[inline(always)]
-  pub fn iterate(mut self) -> Result<ArrayIterator<'read, 'parent, R, S>, JsonError<'read, R, S>> {
+  pub async fn iterate(
+    mut self,
+  ) -> Result<AsyncArrayIterator<'read, 'parent, R, S>, JsonError<'read, R, S>> {
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
-    match deserializer.single_step()? {
+    match deserializer.single_step().await? {
       SingleStepResult::Unknown(SingleStepUnknownResult::ArrayOpened) => {
-        Ok(ArrayIterator { deserializer, done: false })
+        Ok(AsyncArrayIterator { deserializer, done: false })
       }
       SingleStepResult::Unknown(_) => Err(JsonError::TypeError)?,
       _ => Err(JsonError::InternalError),
     }
   }
 
-  /// Get the current item as a 'string'.
-  ///
-  /// As we cannot perform allocations, we do not yield a [`alloc::string::String`] but rather an
-  /// iterator for the contents of the serialized string (with its escape sequences handled). This
-  /// may be converted to an `String` with `.collect::<Result<String, _>>()?`.
-  ///
-  /// RFC 8259 allows strings to specify invalid UTF-8 codepoints. This library supports working
-  /// with such values, as required to be compliant with RFC 8259, but this function's return value
-  /// will error when attempting to return a non-UTF-8 value. If the underlying JSON is valid, the
-  /// deserializer will remain usable afterwards however, even though the rest of the non-UTF-8
-  /// string will be inaccesible. Please keep this detail in mind.
+  /// Get the current item as a string.
   #[inline(always)]
-  pub fn to_str(
+  pub async fn to_str(
     mut self,
-  ) -> Result<
-    impl use<'read, 'parent, R, S> + Iterator<Item = Result<char, JsonError<'read, R, S>>>,
-    JsonError<'read, R, S>,
-  > {
+  ) -> Result<AsyncString<'read, 'parent, R, S>, JsonError<'read, R, S>> {
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
-    match deserializer.single_step()? {
+    match deserializer.single_step().await? {
       SingleStepResult::Unknown(SingleStepUnknownResult::String) => {
-        Ok(handle_string_value(deserializer))
+        Ok(AsyncString(handle_string_value(deserializer)))
       }
       SingleStepResult::Unknown(_) => Err(JsonError::TypeError)?,
       _ => Err(JsonError::InternalError),
@@ -338,9 +359,9 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
 
   /// Get the current item as a number.
   #[inline(always)]
-  pub fn to_number(mut self) -> Result<Number, JsonError<'read, R, S>> {
+  pub async fn to_number(mut self) -> Result<Number, JsonError<'read, R, S>> {
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
-    match deserializer.single_step()? {
+    match deserializer.single_step().await? {
       SingleStepResult::Unknown(SingleStepUnknownResult::Number(number)) => Ok(number),
       SingleStepResult::Unknown(_) => Err(JsonError::TypeError)?,
       _ => Err(JsonError::InternalError),
@@ -349,9 +370,9 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
 
   /// Get the current item as a `bool`.
   #[inline(always)]
-  pub fn to_bool(mut self) -> Result<bool, JsonError<'read, R, S>> {
+  pub async fn to_bool(mut self) -> Result<bool, JsonError<'read, R, S>> {
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
-    match deserializer.single_step()? {
+    match deserializer.single_step().await? {
       SingleStepResult::Unknown(SingleStepUnknownResult::Bool(bool)) => Ok(bool),
       SingleStepResult::Unknown(_) => Err(JsonError::TypeError)?,
       _ => Err(JsonError::InternalError),
@@ -363,9 +384,9 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
   /// The point of this method is to assert the value is `null` _and valid_. `kind` only tells the
   /// caller if it's a valid value, it will be `null`.
   #[inline(always)]
-  pub fn to_null(mut self) -> Result<(), JsonError<'read, R, S>> {
+  pub async fn to_null(mut self) -> Result<(), JsonError<'read, R, S>> {
     let deserializer = self.deserializer.take().ok_or(JsonError::InternalError)?;
-    match deserializer.single_step()? {
+    match deserializer.single_step().await? {
       SingleStepResult::Unknown(SingleStepUnknownResult::Null) => Ok(()),
       SingleStepResult::Unknown(_) => Err(JsonError::TypeError)?,
       _ => Err(JsonError::InternalError),

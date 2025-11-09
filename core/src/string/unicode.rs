@@ -1,4 +1,4 @@
-use crate::{Read, PeekableRead, Stack, JsonError};
+use crate::{AsyncRead, PeekableRead, Stack, JsonError};
 
 /// Calculate the length of the non-ASCII UTF-8 codepoint from its first byte.
 ///
@@ -11,7 +11,7 @@ fn non_ascii_utf8_codepoint_len(b: u8) -> usize {
 
 /// Convert a UTF-8 codepoint to a `char`.
 #[inline(always)]
-fn utf8_codepoint_to_char<'read, R: Read<'read>, S: Stack>(
+fn utf8_codepoint_to_char<'read, R: AsyncRead<'read>, S: Stack>(
   c: &[u8],
 ) -> Result<char, JsonError<'read, R, S>> {
   // https://en.wikipedia.org/wiki/UTF-8#Description
@@ -36,9 +36,9 @@ fn utf8_codepoint_to_char<'read, R: Read<'read>, S: Stack>(
   .ok_or(JsonError::InvalidValue)
 }
 
-/// Read a non-ASCII UTF-8 character from a `Read`.
+/// Read a non-ASCII UTF-8 character from a `AsyncRead`.
 #[inline(always)]
-pub(super) fn read_non_ascii_utf8<'read, R: Read<'read>, S: Stack>(
+pub(super) async fn read_non_ascii_utf8<'read, R: AsyncRead<'read>, S: Stack>(
   reader: &mut PeekableRead<'read, R>,
   first_byte: u8,
 ) -> Result<char, JsonError<'read, R, S>> {
@@ -48,7 +48,7 @@ pub(super) fn read_non_ascii_utf8<'read, R: Read<'read>, S: Stack>(
   let utf8_codepoint = &mut utf8_codepoint[.. utf8_codepoint_len];
   utf8_codepoint[0] = first_byte;
   for byte in &mut utf8_codepoint[1 ..] {
-    *byte = reader.read_byte().map_err(JsonError::ReadError)?;
+    *byte = reader.read_byte().await.map_err(JsonError::ReadError)?;
   }
   utf8_codepoint_to_char(utf8_codepoint)
 }
