@@ -1,3 +1,7 @@
+# `core-json-traits 0.4.1`
+
+- [Add support for (de)serializing `BTreeMap<String, _>` and `HashMap<String, _>`](https://github.com/core-json/core-json/commit/55d8e397697b3c36359cd4a73f7131132df925a0)
+
 # `core-json-traits 0.4.0`
 
 - Updates to `core-json 0.4.0`
