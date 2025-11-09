@@ -33,7 +33,7 @@ fn descend<
       let mut iterator = value.fields().unwrap();
       loop {
         let mut found_field = iterator.next().unwrap().unwrap();
-        if field == &found_field.key().unwrap().collect::<Result<String, _>>().unwrap() {
+        if field == &found_field.key().collect::<Result<String, _>>().unwrap() {
           descend(found_field.value().unwrap(), &path[1 ..], callback);
           return;
         }

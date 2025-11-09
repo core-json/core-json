@@ -8,22 +8,22 @@ use core_json::Read as CjRead;
 use embedded_io::{ReadExactError, Read};
 
 /// An adapter from [`embedded_io::Read`] to [`core_json::Read`].
-pub struct ReadAdapter<R: Read<Error: Copy>> {
+pub struct ReadAdapter<R: Send + Sync + Read<Error: Copy + Send + Sync>> {
   reader: R,
 }
-impl<R: Read<Error: Copy>> fmt::Debug for ReadAdapter<R> {
+impl<R: Send + Sync + Read<Error: Copy + Send + Sync>> fmt::Debug for ReadAdapter<R> {
   fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
     fmt.debug_struct("ReadAdapter").finish_non_exhaustive()
   }
 }
 
-impl<R: Read<Error: Copy>> From<R> for ReadAdapter<R> {
+impl<R: Send + Sync + Read<Error: Copy + Send + Sync>> From<R> for ReadAdapter<R> {
   fn from(reader: R) -> Self {
     Self { reader }
   }
 }
 
-impl<R: Read<Error: Copy>> CjRead<'static> for ReadAdapter<R> {
+impl<R: Send + Sync + Read<Error: Copy + Send + Sync>> CjRead<'static> for ReadAdapter<R> {
   type Error = ReadExactError<R::Error>;
 
   #[inline(always)]
@@ -50,7 +50,7 @@ fn test_read() {
   let mut fields = value.fields().unwrap();
   let field = fields.next().unwrap();
   let mut field = field.unwrap();
-  assert_eq!(field.key().unwrap().collect::<Result<String, _>>().unwrap(), "hello");
+  assert_eq!(field.key().collect::<Result<String, _>>().unwrap(), "hello");
   assert_eq!(
     field.value().unwrap().to_str().unwrap().collect::<Result<String, _>>().unwrap(),
     "goodbye"

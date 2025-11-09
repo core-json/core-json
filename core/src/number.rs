@@ -1,6 +1,6 @@
 use core::{str::FromStr, fmt::Write};
 
-use crate::{Read, PeekableRead, Stack, JsonError};
+use crate::{AsyncRead, PeekableRead, Stack, JsonError};
 
 /// An implementor of `core::fmt::Write` which writes to a slice.
 struct SliceWrite<'a>(&'a mut [u8], usize);
@@ -441,14 +441,14 @@ impl Write for NumberSink {
 
 /// Handle the immediate value within the reader as a number.
 #[inline(always)]
-pub(crate) fn to_number_str<'read, R: Read<'read>, S: Stack>(
+pub(crate) async fn to_number_str<'read, R: AsyncRead<'read>, S: Stack>(
   reader: &mut PeekableRead<'read, R>,
 ) -> Result<Number, JsonError<'read, R, S>> {
   let mut result = NumberSink::new();
 
   // Read until a byte which isn't part of the number, sinking along the way
   while result.push_byte(reader.peek()) {
-    reader.read_byte().map_err(JsonError::ReadError)?;
+    reader.read_byte().await.map_err(JsonError::ReadError)?;
   }
 
   if !result.strictly_valid() {

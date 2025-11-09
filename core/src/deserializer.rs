@@ -2,7 +2,7 @@ use crate::*;
 
 /// Advance the reader until there's a non-whitespace character.
 #[inline(always)]
-fn advance_whitespace<'read, R: Read<'read>, S: Stack>(
+async fn advance_whitespace<'read, R: AsyncRead<'read>, S: Stack>(
   reader: &mut PeekableRead<'read, R>,
 ) -> Result<(), JsonError<'read, R, S>> {
   let mut next;
@@ -11,19 +11,19 @@ fn advance_whitespace<'read, R: Read<'read>, S: Stack>(
     // https://datatracker.ietf.org/doc/html/rfc8259#section-2 defines whitespace as follows
     matches!(next, b'\x20' | b'\x09' | b'\x0A' | b'\x0D')
   } {
-    reader.read_byte().map_err(JsonError::ReadError)?;
+    reader.read_byte().await.map_err(JsonError::ReadError)?;
   }
   Ok(())
 }
 
 /// Advance past a colon.
 #[inline(always)]
-pub(super) fn advance_past_colon<'read, R: Read<'read>, S: Stack>(
+pub(super) async fn advance_past_colon<'read, R: AsyncRead<'read>, S: Stack>(
   reader: &mut PeekableRead<'read, R>,
 ) -> Result<(), JsonError<'read, R, S>> {
-  advance_whitespace(reader)?;
-  match reader.read_byte().map_err(JsonError::ReadError)? {
-    b':' => advance_whitespace(reader)?,
+  advance_whitespace(reader).await?;
+  match reader.read_byte().await.map_err(JsonError::ReadError)? {
+    b':' => advance_whitespace(reader).await?,
     _ => Err(JsonError::InvalidKeyValueDelimiter)?,
   }
   Ok(())
@@ -31,14 +31,14 @@ pub(super) fn advance_past_colon<'read, R: Read<'read>, S: Stack>(
 
 /// Advance past a comma, or to the close of the structure.
 #[inline(always)]
-pub(super) fn advance_past_comma_or_to_close<'read, R: Read<'read>, S: Stack>(
+pub(super) async fn advance_past_comma_or_to_close<'read, R: AsyncRead<'read>, S: Stack>(
   reader: &mut PeekableRead<'read, R>,
 ) -> Result<(), JsonError<'read, R, S>> {
-  advance_whitespace(reader)?;
+  advance_whitespace(reader).await?;
   match reader.peek() {
     b',' => {
-      reader.read_byte().map_err(JsonError::ReadError)?;
-      advance_whitespace(reader)?;
+      reader.read_byte().await.map_err(JsonError::ReadError)?;
+      advance_whitespace(reader).await?;
       if matches!(reader.peek(), b']' | b'}') {
         Err(JsonError::TrailingComma)?;
       }
@@ -95,7 +95,7 @@ pub(super) enum SingleStepResult {
 ///
 /// This assumes there is no leading whitespace present in `reader` and will advance past any
 /// whitespace present before the next logical unit.
-fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
+async fn single_step<'read, 'parent, R: AsyncRead<'read>, S: Stack>(
   reader: &'parent mut PeekableRead<'read, R>,
   stack: &'parent mut S,
 ) -> Result<SingleStepResult, JsonError<'read, R, S>> {
@@ -115,8 +115,8 @@ fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
             the object, as the '}' was already internally read (consumed from the underlying
             reader) by `PeekableRead`.
           */
-          reader.read_byte().map_err(JsonError::ReadError)?;
-          advance_past_comma_or_to_close(reader)?;
+          reader.read_byte().await.map_err(JsonError::ReadError)?;
+          advance_past_comma_or_to_close(reader).await?;
         }
 
         return Ok(SingleStepResult::Object(SingleStepObjectResult::Closed));
@@ -127,7 +127,7 @@ fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
         Err(JsonError::InvalidKey)?;
       }
       // Advance past the '"'
-      reader.read_byte().map_err(JsonError::ReadError)?;
+      reader.read_byte().await.map_err(JsonError::ReadError)?;
 
       // Push how we're reading a value of an unknown type onto the stack, for the value
       stack.push(State::Unknown).map_err(JsonError::StackError)?;
@@ -140,8 +140,8 @@ fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
 
         // If this isn't the outer object, advance past the comma after
         if stack.depth() != 0 {
-          reader.read_byte().map_err(JsonError::ReadError)?;
-          advance_past_comma_or_to_close(reader)?;
+          reader.read_byte().await.map_err(JsonError::ReadError)?;
+          advance_past_comma_or_to_close(reader).await?;
         }
 
         return Ok(SingleStepResult::Array(SingleStepArrayResult::Closed));
@@ -157,33 +157,36 @@ fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
       let result = match kind(reader) {
         // Handle if this opens an object
         Type::Object => {
-          reader.read_byte().map_err(JsonError::ReadError)?;
-          advance_whitespace(reader)?;
+          reader.read_byte().await.map_err(JsonError::ReadError)?;
+          advance_whitespace(reader).await?;
           stack.push(State::Object).map_err(JsonError::StackError)?;
           return Ok(SingleStepResult::Unknown(SingleStepUnknownResult::ObjectOpened));
         }
         // Handle if this opens an array
         Type::Array => {
-          reader.read_byte().map_err(JsonError::ReadError)?;
-          advance_whitespace(reader)?;
+          reader.read_byte().await.map_err(JsonError::ReadError)?;
+          advance_whitespace(reader).await?;
           stack.push(State::Array).map_err(JsonError::StackError)?;
           return Ok(SingleStepResult::Unknown(SingleStepUnknownResult::ArrayOpened));
         }
         // Handle if this opens an string
         Type::String => {
-          reader.read_byte().map_err(JsonError::ReadError)?;
+          reader.read_byte().await.map_err(JsonError::ReadError)?;
           return Ok(SingleStepResult::Unknown(SingleStepUnknownResult::String));
         }
-        Type::Number => {
-          SingleStepResult::Unknown(SingleStepUnknownResult::Number(number::to_number_str(reader)?))
-        }
+        Type::Number => SingleStepResult::Unknown(SingleStepUnknownResult::Number(
+          number::to_number_str(reader).await?,
+        )),
         Type::Bool => {
           let mut bool_string = [0; 4];
-          reader.read_exact_into_non_empty_slice(&mut bool_string).map_err(JsonError::ReadError)?;
+          reader
+            .read_exact_into_non_empty_slice(&mut bool_string)
+            .await
+            .map_err(JsonError::ReadError)?;
           let bool = if &bool_string == b"true" {
             true
           } else {
-            let e = reader.read_byte().map_err(JsonError::ReadError)?;
+            let e = reader.read_byte().await.map_err(JsonError::ReadError)?;
             if !((bool_string == *b"fals") & (e == b'e')) {
               Err(JsonError::TypeError)?;
             }
@@ -193,7 +196,10 @@ fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
         }
         Type::Null => {
           let mut null_string = [0; 4];
-          reader.read_exact_into_non_empty_slice(&mut null_string).map_err(JsonError::ReadError)?;
+          reader
+            .read_exact_into_non_empty_slice(&mut null_string)
+            .await
+            .map_err(JsonError::ReadError)?;
           if null_string != *b"null" {
             Err(JsonError::InvalidValue)?;
           }
@@ -202,7 +208,7 @@ fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
       };
 
       // We now have to read past the next comma, or to the next closing of a structure
-      advance_past_comma_or_to_close(reader)?;
+      advance_past_comma_or_to_close(reader).await?;
 
       Ok(result)
     }
@@ -215,7 +221,7 @@ enum ToDrop {
   StringValue(bool),
 }
 
-pub(crate) struct DelayedDrop<'read, R: Read<'read>, S: Stack> {
+pub(crate) struct DelayedDrop<'read, R: AsyncRead<'read>, S: Stack> {
   /// If this is without work.
   nothing_queued: bool,
   /// An error raised within an internal context and cached as to prevent further usage of the
@@ -229,9 +235,9 @@ pub(crate) struct DelayedDrop<'read, R: Read<'read>, S: Stack> {
   drop_value: bool,
 }
 
-impl<'read, R: Read<'read>, S: Stack> DelayedDrop<'read, R, S> {
-  pub(crate) fn drop(
-    deserializer: &mut Deserializer<'read, R, S>,
+impl<'read, R: AsyncRead<'read>, S: Stack> DelayedDrop<'read, R, S> {
+  pub(crate) async fn drop(
+    deserializer: &mut AsyncDeserializer<'read, R, S>,
   ) -> Result<(), JsonError<'read, R, S>> {
     if deserializer.delayed_drop.nothing_queued {
       return Ok(());
@@ -247,11 +253,11 @@ impl<'read, R: Read<'read>, S: Stack> DelayedDrop<'read, R, S> {
         ToDrop::None => {}
         ToDrop::StringKey(flag) => {
           deserializer.delayed_drop.to_drop = ToDrop::None;
-          StringKey::drop_string_key(deserializer, flag)?;
+          StringKey::drop_string_key(deserializer, flag).await?;
         }
         ToDrop::StringValue(flag) => {
           deserializer.delayed_drop.to_drop = ToDrop::None;
-          StringValue::drop_string_value(deserializer, flag)?;
+          StringValue::drop_string_value(deserializer, flag).await?;
         }
       }
 
@@ -259,7 +265,7 @@ impl<'read, R: Read<'read>, S: Stack> DelayedDrop<'read, R, S> {
       if deserializer.delayed_drop.drop_value {
         deserializer.delayed_drop.drop_value = false;
 
-        let step = match single_step(&mut deserializer.reader, &mut deserializer.stack)? {
+        let step = match single_step(&mut deserializer.reader, &mut deserializer.stack).await? {
           SingleStepResult::Unknown(step) => step,
           // If we had a `Value`, it's an invariant the top of the stack was `State::Unknown`
           _ => Err(JsonError::InternalError)?,
@@ -271,7 +277,9 @@ impl<'read, R: Read<'read>, S: Stack> DelayedDrop<'read, R, S> {
           SingleStepUnknownResult::Bool(_) |
           SingleStepUnknownResult::Null => {}
           // We opened a string we now have to handle
-          SingleStepUnknownResult::String => StringValue::drop_string_value(deserializer, false)?,
+          SingleStepUnknownResult::String => {
+            StringValue::drop_string_value(deserializer, false).await?
+          }
           // We opened an object/array we now have to advance past
           SingleStepUnknownResult::ObjectOpened | SingleStepUnknownResult::ArrayOpened => {
             deserializer.drop_structure()
@@ -281,7 +289,7 @@ impl<'read, R: Read<'read>, S: Stack> DelayedDrop<'read, R, S> {
 
       // Handle dropping of any structures
       while deserializer.delayed_drop.structures_to_drop != 0 {
-        let step = single_step(&mut deserializer.reader, &mut deserializer.stack)?;
+        let step = single_step(&mut deserializer.reader, &mut deserializer.stack).await?;
         match step {
           SingleStepResult::Unknown(SingleStepUnknownResult::String) => {
             // Queue the drop for this string, then iteratively restart this function to actually
@@ -314,13 +322,13 @@ impl<'read, R: Read<'read>, S: Stack> DelayedDrop<'read, R, S> {
 }
 
 /// A deserializer for a JSON-encoded structure.
-pub struct Deserializer<'read, R: Read<'read>, S: Stack> {
+pub struct AsyncDeserializer<'read, R: AsyncRead<'read>, S: Stack> {
   pub(crate) reader: PeekableRead<'read, R>,
   stack: S,
   delayed_drop: DelayedDrop<'read, R, S>,
 }
 
-impl<'read, R: Read<'read>, S: Stack> Deserializer<'read, R, S> {
+impl<'read, R: AsyncRead<'read>, S: Stack> AsyncDeserializer<'read, R, S> {
   /// Queue the drop of a `StringKey`.
   #[inline(always)]
   pub(crate) fn drop_string_key(&mut self, flag: bool) {
@@ -354,24 +362,33 @@ impl<'read, R: Read<'read>, S: Stack> Deserializer<'read, R, S> {
   }
 
   #[inline(always)]
-  pub(super) fn single_step(&mut self) -> Result<SingleStepResult, JsonError<'read, R, S>> {
-    let res = DelayedDrop::drop(self);
-    let res = res.and_then(|()| single_step(&mut self.reader, &mut self.stack));
-    if let Some(e) = res.as_ref().err() {
-      self.delayed_drop.nothing_queued = false;
-      self.delayed_drop.error = Some(*e);
+  pub(super) async fn single_step(&mut self) -> Result<SingleStepResult, JsonError<'read, R, S>> {
+    match DelayedDrop::drop(self).await {
+      Ok(()) => {}
+      Err(e) => {
+        self.delayed_drop.nothing_queued = false;
+        self.delayed_drop.error = Some(e);
+        Err(e)?
+      }
     }
-    res
+    match single_step(&mut self.reader, &mut self.stack).await {
+      Ok(value) => Ok(value),
+      Err(e) => {
+        self.delayed_drop.nothing_queued = false;
+        self.delayed_drop.error = Some(e);
+        Err(e)?
+      }
+    }
   }
 }
 
 /// A JSON value.
 // Internally, we assume whenever this is held, the top item on the stack is `State::Unknown`
-pub struct Value<'read, 'parent, R: Read<'read>, S: Stack> {
-  pub(crate) deserializer: Option<&'parent mut Deserializer<'read, R, S>>,
+pub struct AsyncValue<'read, 'parent, R: AsyncRead<'read>, S: Stack> {
+  pub(crate) deserializer: Option<&'parent mut AsyncDeserializer<'read, R, S>>,
 }
 
-impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for Value<'read, 'parent, R, S> {
+impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> Drop for AsyncValue<'read, 'parent, R, S> {
   #[inline(always)]
   fn drop(&mut self) {
     /*
@@ -385,7 +402,7 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for Value<'read, 'parent, R,
   }
 }
 
-impl<'read, R: Read<'read>, S: Stack> Deserializer<'read, R, S> {
+impl<'read, R: AsyncRead<'read>, S: Stack> AsyncDeserializer<'read, R, S> {
   /// Create a new deserializer.
   ///
   /// This will advance past any whitespace present at the start of the reader, per RFC 8259's
@@ -395,14 +412,14 @@ impl<'read, R: Read<'read>, S: Stack> Deserializer<'read, R, S> {
   /// yet no further. If `reader` is not aligned to valid JSON, the state of `reader` is undefined
   /// after this.
   #[inline(always)]
-  pub fn new(reader: R) -> Result<Self, JsonError<'read, R, S>> {
-    let mut reader = PeekableRead::try_from(reader).map_err(JsonError::ReadError)?;
-    advance_whitespace(&mut reader)?;
+  pub async fn new(reader: R) -> Result<Self, JsonError<'read, R, S>> {
+    let mut reader = PeekableRead::try_from(reader).await.map_err(JsonError::ReadError)?;
+    advance_whitespace(&mut reader).await?;
 
     let mut stack = S::empty();
     stack.push(State::Unknown).map_err(JsonError::StackError)?;
 
-    Ok(Deserializer {
+    Ok(AsyncDeserializer {
       reader,
       stack,
       delayed_drop: DelayedDrop {
@@ -415,19 +432,19 @@ impl<'read, R: Read<'read>, S: Stack> Deserializer<'read, R, S> {
     })
   }
 
-  /// Obtain the `Value` representing the serialized structure.
+  /// Obtain the `AsyncValue` representing the serialized structure.
   ///
-  /// This takes a mutable reference as `Deserializer` is the owned object representing the
+  /// This takes a mutable reference as `AsyncDeserializer` is the owned object representing the
   /// deserializer's state. However, this is not eligible to be called more than once, even after
   /// the initial mutable borrow is dropped. Multiple calls to this function will cause an error to
   /// be returned.
   #[inline(always)]
-  pub fn value(&mut self) -> Result<Value<'read, '_, R, S>, JsonError<'read, R, S>> {
+  pub async fn value(&mut self) -> Result<AsyncValue<'read, '_, R, S>, JsonError<'read, R, S>> {
     if (self.stack.depth() != 1) || (!self.delayed_drop.nothing_queued) {
       Err(JsonError::ReusedDeserializer)?;
     }
-    let mut result = Value { deserializer: Some(self) };
-    if !matches!(result.kind()?, Type::Object | Type::Array) {
+    let mut result = AsyncValue { deserializer: Some(self) };
+    if !matches!(result.kind().await?, Type::Object | Type::Array) {
       Err(JsonError::TypeError)?;
     }
     Ok(result)
