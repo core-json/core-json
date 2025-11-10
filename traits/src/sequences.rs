@@ -3,7 +3,7 @@ use alloc::{vec, vec::Vec};
 
 use crate::{Read, Stack, JsonError, Value, JsonDeserialize, JsonStructure, JsonSerialize};
 
-impl<T: 'static + Default + JsonDeserialize, const N: usize> JsonDeserialize for [T; N] {
+impl<T: Default + JsonDeserialize, const N: usize> JsonDeserialize for [T; N] {
   fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
     value: Value<'read, 'parent, B, S>,
   ) -> Result<Self, JsonError<'read, B, S>> {
@@ -23,10 +23,10 @@ impl<T: 'static + Default + JsonDeserialize, const N: usize> JsonDeserialize for
     Ok(res)
   }
 }
-impl<T: 'static + Default + JsonDeserialize, const N: usize> JsonStructure for [T; N] {}
+impl<T: Default + JsonDeserialize, const N: usize> JsonStructure for [T; N] {}
 
 #[cfg(feature = "alloc")]
-impl<T: 'static + JsonDeserialize> JsonDeserialize for Vec<T> {
+impl<T: JsonDeserialize> JsonDeserialize for Vec<T> {
   fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
     value: Value<'read, 'parent, B, S>,
   ) -> Result<Self, JsonError<'read, B, S>> {
@@ -39,7 +39,7 @@ impl<T: 'static + JsonDeserialize> JsonDeserialize for Vec<T> {
   }
 }
 #[cfg(feature = "alloc")]
-impl<T: 'static + JsonDeserialize> JsonStructure for Vec<T> {}
+impl<T: JsonDeserialize> JsonStructure for Vec<T> {}
 
 impl<T: JsonSerialize> JsonSerialize for [T] {
   fn serialize(&self) -> impl Iterator<Item = char> {

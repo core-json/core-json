@@ -60,7 +60,7 @@ impl<T: JsonDeserialize> JsonDeserialize for BTreeMap<String, T> {
     deserialize_map::<T, _, _>(value)?.collect()
   }
 }
-impl<K: AsRef<str>, T: 'static + JsonSerialize> JsonSerialize for BTreeMap<K, T> {
+impl<K: AsRef<str>, T: JsonSerialize> JsonSerialize for BTreeMap<K, T> {
   fn serialize(&self) -> impl Iterator<Item = char> {
     serialize_map(self.iter().map(|(key, value)| (key.as_ref(), value)))
   }
@@ -76,7 +76,7 @@ impl<T: JsonDeserialize> JsonDeserialize for HashMap<String, T> {
   }
 }
 #[cfg(feature = "std")]
-impl<K: AsRef<str>, T: 'static + JsonSerialize> JsonSerialize for HashMap<K, T> {
+impl<K: AsRef<str>, T: JsonSerialize> JsonSerialize for HashMap<K, T> {
   fn serialize(&self) -> impl Iterator<Item = char> {
     serialize_map(self.iter().map(|(key, value)| (key.as_ref(), value)))
   }
