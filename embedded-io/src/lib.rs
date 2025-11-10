@@ -50,7 +50,10 @@ fn test_read() {
   let mut fields = value.fields().unwrap();
   let field = fields.next().unwrap();
   let mut field = field.unwrap();
-  assert_eq!(field.key().collect::<Result<String, _>>().unwrap(), "hello");
-  assert_eq!(field.value().to_str().unwrap().collect::<Result<String, _>>().unwrap(), "goodbye");
+  assert_eq!(field.key().unwrap().collect::<Result<String, _>>().unwrap(), "hello");
+  assert_eq!(
+    field.value().unwrap().to_str().unwrap().collect::<Result<String, _>>().unwrap(),
+    "goodbye"
+  );
   assert!(fields.next().is_none());
 }

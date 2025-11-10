@@ -21,10 +21,6 @@ pub(crate) struct ValidateString<'read, 'parent, R: Read<'read>, S: Stack> {
 impl<'read, 'parent, R: Read<'read>, S: Stack> ValidateString<'read, 'parent, R, S> {
   #[inline(always)]
   fn next_char(&mut self) -> Result<Option<StringCharacter>, JsonError<'read, R, S>> {
-    if let Some(e) = self.deserializer.error {
-      return Err(e);
-    }
-
     let this = self.deserializer.reader.read_byte().map_err(JsonError::ReadError)?;
 
     // https://datatracker.ietf.org/doc/html/rfc8259#section-7
@@ -72,6 +68,14 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> ValidateString<'read, 'parent, R,
       _ => Err(JsonError::InvalidValue)?,
     })
   }
+
+  #[inline(always)]
+  fn drop(&mut self) -> Result<(), JsonError<'read, R, S>> {
+    while !self.done {
+      self.next_char()?;
+    }
+    Ok(())
+  }
 }
 
 /// A character within a JSON-serialized string.
@@ -90,7 +94,7 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Iterator for ValidateString<'read
       Ok(Some(res)) => Some(Ok(res)),
       Ok(None) => None,
       Err(e) => {
-        self.deserializer.error = Some(e);
+        self.deserializer.poison(e);
         self.done = true;
         Some(Err(e))
       }
@@ -110,16 +114,9 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> String<'read, 'parent, R, S> {
   pub(crate) fn read(deserializer: &'parent mut Deserializer<'read, R, S>) -> Self {
     String { validation: ValidateString { deserializer, done: false }, errored: false }
   }
-
-  #[inline(always)]
-  fn drop(&mut self) {
-    while !self.validation.done {
-      // We don't handle the error here as `<ValidateString as Iterator>::next` will
-      self.validation.next();
-    }
-  }
 }
 
+#[inline(always)]
 fn handle_escaped_unicode<'read, 'parent, R: Read<'read>, S: Stack>(
   hex: [u8; 4],
   validation: &mut ValidateString<'read, 'parent, R, S>,
@@ -194,30 +191,33 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Iterator for String<'read, 'paren
 
 /// A wrapper for a `String` which is a key.
 ///
-/// When dropped, this additionally reads past the colon separating the key from the value.
+/// When dropped (which MUST be done manually), this additionally reads past the colon separating
+/// the key from the value.
 pub(crate) struct StringKey<'read, 'parent, R: Read<'read>, S: Stack>(
-  pub(crate) Option<String<'read, 'parent, R, S>>,
+  pub(crate) String<'read, 'parent, R, S>,
 );
 impl<'read, 'parent, R: Read<'read>, S: Stack> StringKey<'read, 'parent, R, S> {
   #[inline(always)]
-  pub(super) fn drop(&mut self) -> Option<&'parent mut Deserializer<'read, R, S>> {
-    let mut string = self.0.take()?;
-    string.drop();
-    let deserializer = string.validation.deserializer;
-    if deserializer.error.is_none() {
-      match crate::advance_past_colon(&mut deserializer.reader) {
-        Ok(()) => {}
-        Err(e) => deserializer.error = Some(e),
-      }
-    }
-    Some(deserializer)
+  pub(crate) fn drop_string_key(
+    deserializer: &mut Deserializer<'read, R, S>,
+    done: bool,
+  ) -> Result<(), JsonError<'read, R, S>> {
+    (ValidateString { deserializer, done }).drop()?;
+    crate::advance_past_colon(&mut deserializer.reader)
+  }
+}
+impl<'read, 'parent, R: Read<'read>, S: Stack> StringKey<'read, 'parent, R, S> {
+  #[inline(always)]
+  pub(super) fn drop(self) -> &'parent mut Deserializer<'read, R, S> {
+    self.0.validation.deserializer.drop_string_key(self.0.validation.done);
+    self.0.validation.deserializer
   }
 }
 impl<'read, 'parent, R: Read<'read>, S: Stack> Iterator for StringKey<'read, 'parent, R, S> {
   type Item = Result<char, JsonError<'read, R, S>>;
   #[inline(always)]
   fn next(&mut self) -> Option<Self::Item> {
-    self.0.as_mut().and_then(String::next)
+    self.0.next()
   }
 }
 
@@ -227,18 +227,20 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Iterator for StringKey<'read, 'pa
 pub(crate) struct StringValue<'read, 'parent, R: Read<'read>, S: Stack>(
   pub(crate) String<'read, 'parent, R, S>,
 );
+impl<'read, 'parent, R: Read<'read>, S: Stack> StringValue<'read, 'parent, R, S> {
+  #[inline(always)]
+  pub(crate) fn drop_string_value(
+    deserializer: &mut Deserializer<'read, R, S>,
+    done: bool,
+  ) -> Result<(), JsonError<'read, R, S>> {
+    (ValidateString { deserializer, done }).drop()?;
+    crate::advance_past_comma_or_to_close(&mut deserializer.reader)
+  }
+}
 impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for StringValue<'read, 'parent, R, S> {
   #[inline(always)]
   fn drop(&mut self) {
-    let string = &mut self.0;
-    string.drop();
-    let deserializer = &mut string.validation.deserializer;
-    if deserializer.error.is_none() {
-      match crate::advance_past_comma_or_to_close(&mut deserializer.reader) {
-        Ok(()) => {}
-        Err(e) => deserializer.error = Some(e),
-      }
-    }
+    self.0.validation.deserializer.drop_string_value(self.0.validation.done)
   }
 }
 impl<'read, 'parent, R: Read<'read>, S: Stack> Iterator for StringValue<'read, 'parent, R, S> {

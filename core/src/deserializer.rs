@@ -209,27 +209,157 @@ fn single_step<'read, 'parent, R: Read<'read>, S: Stack>(
   }
 }
 
+enum ToDrop {
+  None,
+  StringKey(bool),
+  StringValue(bool),
+}
+
+pub(crate) struct DelayedDrop<'read, R: Read<'read>, S: Stack> {
+  /// If this is without work.
+  nothing_queued: bool,
+  /// An error raised within an internal context and cached as to prevent further usage of the
+  /// deserializer.
+  error: Option<JsonError<'read, R, S>>,
+  /// An item to `Drop` whenever the deserializer regains the control flow.
+  to_drop: ToDrop,
+  /// The amount of structures to drop whenever the deserializer regains the control flow.
+  structures_to_drop: u64,
+  /// If an unknown value should be dropped whenever the deserializer regains the control flow.
+  drop_value: bool,
+}
+
+impl<'read, R: Read<'read>, S: Stack> DelayedDrop<'read, R, S> {
+  pub(crate) fn drop(
+    deserializer: &mut Deserializer<'read, R, S>,
+  ) -> Result<(), JsonError<'read, R, S>> {
+    if deserializer.delayed_drop.nothing_queued {
+      return Ok(());
+    }
+
+    if let Some(err) = deserializer.delayed_drop.error {
+      Err(err)?;
+    }
+
+    'outer: loop {
+      // Handle dropping of unit types
+      match deserializer.delayed_drop.to_drop {
+        ToDrop::None => {}
+        ToDrop::StringKey(flag) => {
+          deserializer.delayed_drop.to_drop = ToDrop::None;
+          StringKey::drop_string_key(deserializer, flag)?;
+        }
+        ToDrop::StringValue(flag) => {
+          deserializer.delayed_drop.to_drop = ToDrop::None;
+          StringValue::drop_string_value(deserializer, flag)?;
+        }
+      }
+
+      // Handle dropping of unknown values
+      if deserializer.delayed_drop.drop_value {
+        deserializer.delayed_drop.drop_value = false;
+
+        let step = match single_step(&mut deserializer.reader, &mut deserializer.stack)? {
+          SingleStepResult::Unknown(step) => step,
+          // If we had a `Value`, it's an invariant the top of the stack was `State::Unknown`
+          _ => Err(JsonError::InternalError)?,
+        };
+
+        match step {
+          // We successfully advanced past this item
+          SingleStepUnknownResult::Number(_) |
+          SingleStepUnknownResult::Bool(_) |
+          SingleStepUnknownResult::Null => {}
+          // We opened a string we now have to handle
+          SingleStepUnknownResult::String => StringValue::drop_string_value(deserializer, false)?,
+          // We opened an object/array we now have to advance past
+          SingleStepUnknownResult::ObjectOpened | SingleStepUnknownResult::ArrayOpened => {
+            deserializer.drop_structure()
+          }
+        }
+      }
+
+      // Handle dropping of any structures
+      while deserializer.delayed_drop.structures_to_drop != 0 {
+        let step = single_step(&mut deserializer.reader, &mut deserializer.stack)?;
+        match step {
+          SingleStepResult::Unknown(SingleStepUnknownResult::String) => {
+            // Queue the drop for this string, then iteratively restart this function to actually
+            // drop it, which will return us into loop
+            handle_string_value(deserializer);
+            continue 'outer;
+          }
+          SingleStepResult::Object(SingleStepObjectResult::Field) => {
+            handle_field(deserializer);
+            continue 'outer;
+          }
+          SingleStepResult::Object(SingleStepObjectResult::Closed) |
+          SingleStepResult::Array(SingleStepArrayResult::Closed) => {
+            deserializer.delayed_drop.structures_to_drop -= 1
+          }
+          SingleStepResult::Unknown(
+            SingleStepUnknownResult::ObjectOpened | SingleStepUnknownResult::ArrayOpened,
+          ) => deserializer.delayed_drop.structures_to_drop += 1,
+          _ => {}
+        }
+      }
+
+      // If we completed all work, break out of the drop loop
+      deserializer.delayed_drop.nothing_queued = true;
+      break;
+    }
+
+    Ok(())
+  }
+}
+
 /// A deserializer for a JSON-encoded structure.
 pub struct Deserializer<'read, R: Read<'read>, S: Stack> {
   pub(crate) reader: PeekableRead<'read, R>,
   stack: S,
-  /*
-    We advance the deserializer within `Drop` which cannot return an error. If an error is raised
-    within drop, we store it here to be consumed upon the next call to a method which can return an
-    error (if one is ever called).
-  */
-  pub(crate) error: Option<JsonError<'read, R, S>>,
+  delayed_drop: DelayedDrop<'read, R, S>,
 }
 
 impl<'read, R: Read<'read>, S: Stack> Deserializer<'read, R, S> {
+  /// Queue the drop of a `StringKey`.
+  #[inline(always)]
+  pub(crate) fn drop_string_key(&mut self, flag: bool) {
+    self.delayed_drop.nothing_queued = false;
+    self.delayed_drop.to_drop = ToDrop::StringKey(flag);
+  }
+  /// Queue the drop of a `StringValue`.
+  #[inline(always)]
+  pub(crate) fn drop_string_value(&mut self, flag: bool) {
+    self.delayed_drop.nothing_queued = false;
+    self.delayed_drop.to_drop = ToDrop::StringValue(flag);
+  }
+  /// Queue the drop of an object or array.
+  #[inline(always)]
+  pub(crate) fn drop_structure(&mut self) {
+    self.delayed_drop.nothing_queued = false;
+    self.delayed_drop.structures_to_drop += 1;
+  }
+  /// Queue the drop of a value of unknown type.
+  #[inline(always)]
+  pub(crate) fn drop_value(&mut self) {
+    self.delayed_drop.nothing_queued = false;
+    self.delayed_drop.drop_value = true;
+  }
+
+  /// Poison the deserializer such that all future calls return an error.
+  #[inline(always)]
+  pub(crate) fn poison(&mut self, error: JsonError<'read, R, S>) {
+    self.delayed_drop.nothing_queued = false;
+    self.delayed_drop.error = Some(error);
+  }
+
   #[inline(always)]
   pub(super) fn single_step(&mut self) -> Result<SingleStepResult, JsonError<'read, R, S>> {
-    if let Some(e) = self.error {
-      Err(e)?;
-    }
-    let res = single_step(&mut self.reader, &mut self.stack);
+    let res = DelayedDrop::drop(self);
+    let res = res.and_then(|()| single_step(&mut self.reader, &mut self.stack));
     if let Some(e) = res.as_ref().err() {
-      self.error = Some(*e);
+      self.delayed_drop.nothing_queued = false;
+      self.delayed_drop.error = Some(*e);
     }
     res
   }
@@ -242,6 +372,7 @@ pub struct Value<'read, 'parent, R: Read<'read>, S: Stack> {
 }
 
 impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for Value<'read, 'parent, R, S> {
+  #[inline(always)]
   fn drop(&mut self) {
     /*
       When this value is dropped, we advance the deserializer past it if it hasn't already been
@@ -249,60 +380,7 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for Value<'read, 'parent, R,
       implementations).
     */
     if let Some(deserializer) = self.deserializer.take() {
-      if deserializer.error.is_some() {
-        return;
-      }
-
-      let Some(current) = deserializer.stack.peek() else {
-        deserializer.error = Some(JsonError::InternalError);
-        return;
-      };
-
-      let mut depth = match current {
-        State::Object | State::Array => 1,
-        State::Unknown => {
-          let step = match deserializer.single_step() {
-            Ok(SingleStepResult::Unknown(step)) => step,
-            Ok(_) => {
-              deserializer.error = Some(JsonError::InternalError);
-              return;
-            }
-            Err(_) => return,
-          };
-          match step {
-            // We successfully advanced past this item
-            SingleStepUnknownResult::Number(_) |
-            SingleStepUnknownResult::Bool(_) |
-            SingleStepUnknownResult::Null => return,
-            // We opened a string we now have to handle
-            SingleStepUnknownResult::String => {
-              handle_string_value(deserializer);
-              return;
-            }
-            // We opened an object/array we now have to advance past
-            SingleStepUnknownResult::ObjectOpened | SingleStepUnknownResult::ArrayOpened => 1,
-          }
-        }
-      };
-
-      // Since our object isn't a unit, step the deserializer until it's advanced past
-      while depth != 0 {
-        let Ok(step) = deserializer.single_step() else { return };
-        match step {
-          SingleStepResult::Unknown(SingleStepUnknownResult::String) => {
-            handle_string_value(deserializer);
-          }
-          SingleStepResult::Object(SingleStepObjectResult::Field) => {
-            handle_field(deserializer);
-          }
-          SingleStepResult::Object(SingleStepObjectResult::Closed) |
-          SingleStepResult::Array(SingleStepArrayResult::Closed) => depth -= 1,
-          SingleStepResult::Unknown(
-            SingleStepUnknownResult::ObjectOpened | SingleStepUnknownResult::ArrayOpened,
-          ) => depth += 1,
-          _ => {}
-        }
-      }
+      deserializer.drop_value();
     }
   }
 }
@@ -324,7 +402,17 @@ impl<'read, R: Read<'read>, S: Stack> Deserializer<'read, R, S> {
     let mut stack = S::empty();
     stack.push(State::Unknown).map_err(JsonError::StackError)?;
 
-    Ok(Deserializer { reader, stack, error: None })
+    Ok(Deserializer {
+      reader,
+      stack,
+      delayed_drop: DelayedDrop {
+        nothing_queued: true,
+        error: None,
+        to_drop: ToDrop::None,
+        structures_to_drop: 0,
+        drop_value: false,
+      },
+    })
   }
 
   /// Obtain the `Value` representing the serialized structure.
@@ -335,7 +423,7 @@ impl<'read, R: Read<'read>, S: Stack> Deserializer<'read, R, S> {
   /// be returned.
   #[inline(always)]
   pub fn value(&mut self) -> Result<Value<'read, '_, R, S>, JsonError<'read, R, S>> {
-    if (self.stack.depth() != 1) || self.error.is_some() {
+    if (self.stack.depth() != 1) || (!self.delayed_drop.nothing_queued) {
       Err(JsonError::ReusedDeserializer)?;
     }
     let mut result = Value { deserializer: Some(self) };

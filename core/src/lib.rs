@@ -90,7 +90,7 @@ fn kind<'read, R: Read<'read>>(reader: &PeekableRead<'read, R>) -> Type {
 
 /// A field within an object.
 pub struct Field<'read, 'parent, R: Read<'read>, S: Stack> {
-  key: StringKey<'read, 'parent, R, S>,
+  key: Option<StringKey<'read, 'parent, R, S>>,
 }
 
 /// Handle a field.
@@ -104,7 +104,7 @@ pub struct Field<'read, 'parent, R: Read<'read>, S: Stack> {
 fn handle_field<'read, 'parent, R: Read<'read>, S: Stack>(
   deserializer: &'parent mut Deserializer<'read, R, S>,
 ) -> Field<'read, 'parent, R, S> {
-  Field { key: StringKey(Some(String::read(deserializer))) }
+  Field { key: Some(StringKey(String::read(deserializer))) }
 }
 
 /// Handle a string value.
@@ -133,24 +133,30 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Field<'read, 'parent, R, S> {
   /// If the JSON underlying is valid yet does not represent a valid UTF-8 sequence, the iterator
   /// will error, yet `Field::value` may still be called and deserialization may continue. The rest
   /// of the key will not be accessible however.
+  #[allow(clippy::type_complexity)]
   #[inline(always)]
   pub fn key(
     &mut self,
-  ) -> &mut (impl use<'read, 'parent, R, S> + Iterator<Item = Result<char, JsonError<'read, R, S>>>)
-  {
-    &mut self.key
+  ) -> Result<
+    &mut (impl use<'read, 'parent, R, S> + Iterator<Item = Result<char, JsonError<'read, R, S>>>),
+    JsonError<'read, R, S>,
+  > {
+    self.key.as_mut().ok_or(JsonError::InternalError)
   }
+
   /// Access the field's value.
   #[inline(always)]
-  pub fn value(mut self) -> Value<'read, 'parent, R, S> {
-    Value { deserializer: self.key.drop() }
+  pub fn value(mut self) -> Result<Value<'read, 'parent, R, S>, JsonError<'read, R, S>> {
+    Ok(Value { deserializer: Some(self.key.take().ok_or(JsonError::InternalError)?.drop()) })
   }
 }
 
 impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for Field<'read, 'parent, R, S> {
   #[inline(always)]
   fn drop(&mut self) {
-    drop(Value { deserializer: self.key.drop() });
+    if let Some(key) = self.key.take() {
+      drop(Value { deserializer: Some(key.drop()) });
+    }
   }
 }
 
@@ -164,20 +170,8 @@ pub struct FieldIterator<'read, 'parent, R: Read<'read>, S: Stack> {
 impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for FieldIterator<'read, 'parent, R, S> {
   #[inline(always)]
   fn drop(&mut self) {
-    if self.deserializer.error.is_some() {
-      return;
-    }
-
-    loop {
-      let Some(next) = self.next() else { break };
-      let next = next.map(|_| ());
-      match next {
-        Ok(()) => {}
-        Err(e) => {
-          self.deserializer.error = Some(e);
-          break;
-        }
-      }
+    if !self.done {
+      self.deserializer.drop_structure();
     }
   }
 }
@@ -196,10 +190,6 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> FieldIterator<'read, 'parent, R, 
   /// method for context.
   #[allow(clippy::type_complexity, clippy::should_implement_trait)]
   pub fn next(&mut self) -> Option<Result<Field<'read, '_, R, S>, JsonError<'read, R, S>>> {
-    if let Some(err) = self.deserializer.error {
-      return Some(Err(err));
-    }
-
     if self.done {
       None?;
     }
@@ -231,20 +221,8 @@ pub struct ArrayIterator<'read, 'parent, R: Read<'read>, S: Stack> {
 impl<'read, 'parent, R: Read<'read>, S: Stack> Drop for ArrayIterator<'read, 'parent, R, S> {
   #[inline(always)]
   fn drop(&mut self) {
-    if self.deserializer.error.is_some() {
-      return;
-    }
-
-    loop {
-      let Some(next) = self.next() else { break };
-      let next = next.map(|_| ());
-      match next {
-        Ok(()) => {}
-        Err(e) => {
-          self.deserializer.error = Some(e);
-          break;
-        }
-      }
+    if !self.done {
+      self.deserializer.drop_structure();
     }
   }
 }
@@ -263,10 +241,6 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> ArrayIterator<'read, 'parent, R, 
   /// method for context.
   #[allow(clippy::should_implement_trait)]
   pub fn next(&mut self) -> Option<Result<Value<'read, '_, R, S>, JsonError<'read, R, S>>> {
-    if let Some(err) = self.deserializer.error {
-      return Some(Err(err));
-    }
-
     if self.done {
       None?;
     }
@@ -297,7 +271,9 @@ impl<'read, 'parent, R: Read<'read>, S: Stack> Value<'read, 'parent, R, S> {
   /// is a valid item, it will be of this type.
   #[inline(always)]
   pub fn kind(&mut self) -> Result<Type, JsonError<'read, R, S>> {
-    Ok(kind(&self.deserializer.as_ref().ok_or(JsonError::InternalError)?.reader))
+    let deserializer = self.deserializer.as_mut().ok_or(JsonError::InternalError)?;
+    DelayedDrop::drop(deserializer)?;
+    Ok(kind(&deserializer.reader))
   }
 
   /// Iterate over the fields within this object.

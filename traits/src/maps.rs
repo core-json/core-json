@@ -14,11 +14,19 @@ fn deserialize_map<'read, 'parent, T: JsonDeserialize, R: Read<'read>, S: Stack>
       Ok(value) => value,
       Err(e) => return Some(Err(e)),
     };
-    let key = match field.key().collect::<Result<String, _>>() {
+    let key = match (match field.key() {
+      Ok(key) => key,
+      Err(e) => return Some(Err(e)),
+    })
+    .collect::<Result<String, _>>()
+    {
       Ok(key) => key,
       Err(e) => return Some(Err(e)),
     };
-    let value = field.value();
+    let value = match field.value() {
+      Ok(value) => value,
+      Err(e) => return Some(Err(e)),
+    };
     match T::deserialize(value) {
       Ok(value) => Some(Ok((key, value))),
       Err(e) => Some(Err(e)),
