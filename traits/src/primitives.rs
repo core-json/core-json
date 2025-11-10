@@ -1,121 +1,11 @@
 use crate::{Read, Stack, JsonError, Value, JsonDeserialize, JsonSerialize};
 
-impl JsonDeserialize for i8 {
-  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
-    value: Value<'read, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'read, B, S>> {
-    value
-      .to_number()?
-      .i64()
-      .ok_or(JsonError::TypeError)?
-      .try_into()
-      .map_err(|_| JsonError::TypeError)
-  }
-}
-impl JsonDeserialize for i16 {
-  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
-    value: Value<'read, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'read, B, S>> {
-    value
-      .to_number()?
-      .i64()
-      .ok_or(JsonError::TypeError)?
-      .try_into()
-      .map_err(|_| JsonError::TypeError)
-  }
-}
-impl JsonDeserialize for i32 {
-  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
-    value: Value<'read, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'read, B, S>> {
-    value
-      .to_number()?
-      .i64()
-      .ok_or(JsonError::TypeError)?
-      .try_into()
-      .map_err(|_| JsonError::TypeError)
-  }
-}
-impl JsonDeserialize for i64 {
-  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
-    value: Value<'read, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'read, B, S>> {
-    value.to_number()?.i64().ok_or(JsonError::TypeError)
-  }
-}
-
-impl JsonDeserialize for u8 {
-  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
-    value: Value<'read, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'read, B, S>> {
-    value
-      .to_number()?
-      .i64()
-      .ok_or(JsonError::TypeError)?
-      .try_into()
-      .map_err(|_| JsonError::TypeError)
-  }
-}
-impl JsonDeserialize for u16 {
-  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
-    value: Value<'read, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'read, B, S>> {
-    value
-      .to_number()?
-      .i64()
-      .ok_or(JsonError::TypeError)?
-      .try_into()
-      .map_err(|_| JsonError::TypeError)
-  }
-}
-impl JsonDeserialize for u32 {
-  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
-    value: Value<'read, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'read, B, S>> {
-    value
-      .to_number()?
-      .i64()
-      .ok_or(JsonError::TypeError)?
-      .try_into()
-      .map_err(|_| JsonError::TypeError)
-  }
-}
-impl JsonDeserialize for u64 {
-  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
-    value: Value<'read, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'read, B, S>> {
-    value
-      .to_number()?
-      .i64()
-      .ok_or(JsonError::TypeError)?
-      .try_into()
-      .map_err(|_| JsonError::TypeError)
-  }
-}
-
-impl JsonDeserialize for bool {
-  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
-    value: Value<'read, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'read, B, S>> {
-    value.to_bool()
-  }
-}
-
-/// Deserialize `null` as `()`.
-impl JsonDeserialize for () {
-  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
-    value: Value<'read, 'parent, B, S>,
-  ) -> Result<Self, JsonError<'read, B, S>> {
-    value.to_null()
-  }
-}
-
-struct IntInterator {
-  buf: [u8; 20],
+struct IntInterator<const CAPACITY: usize> {
+  buf: [u8; CAPACITY],
   i: usize,
   len: usize,
 }
-impl IntInterator {
+impl<const CAPACITY: usize> IntInterator<CAPACITY> {
   fn new(value: impl core::fmt::Display) -> Self {
     use core::fmt::Write;
 
@@ -137,15 +27,16 @@ impl IntInterator {
       }
     }
 
-    let mut buf = [0; 20];
+    let mut buf = [0; CAPACITY];
     let mut writer = SliceWrite(&mut buf, 0);
-    write!(&mut writer, "{}", value).expect("integer primitive exceeded 20 base-10 digits");
+    write!(&mut writer, "{}", value)
+      .expect("integer primitive exceeded CAPACITY of base-10 digits");
     let len = writer.1;
 
     IntInterator { buf, i: 0, len }
   }
 }
-impl Iterator for IntInterator {
+impl<const CAPACITY: usize> Iterator for IntInterator<CAPACITY> {
   type Item = char;
   fn next(&mut self) -> Option<Self::Item> {
     if self.i == self.len {
@@ -157,44 +48,67 @@ impl Iterator for IntInterator {
     Some(result as char)
   }
 }
-impl JsonSerialize for i8 {
-  fn serialize(&self) -> impl Iterator<Item = char> {
-    IntInterator::new(*self)
+
+macro_rules! int_primitive {
+  ($int: ident) => {
+    impl JsonDeserialize for $int {
+      fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+        value: Value<'read, 'parent, B, S>,
+      ) -> Result<Self, JsonError<'read, B, S>> {
+        value
+          .to_number()?
+          .i64()
+          .ok_or(JsonError::TypeError)?
+          .try_into()
+          .map_err(|_| JsonError::TypeError)
+      }
+    }
+
+    impl JsonSerialize for $int {
+      fn serialize(&self) -> impl Iterator<Item = char> {
+        const CAPACITY: usize = {
+          const BITS: usize = 8 * core::mem::size_of::<$int>();
+          /*
+            Since this number may be up to `2^{BITS}`, we check `(1 + {BITS / 3}) > CAPACITY`.
+            This handles one digit for `+/-` and conservatively approximates `10` as `2^3`.
+
+            This makes the `expect` in `IntInterator` safe for any sane definition of Rust.
+          */
+          1 + BITS.div_ceil(3)
+        };
+
+        IntInterator::<CAPACITY>::new(*self)
+      }
+    }
+  };
+}
+int_primitive!(i8);
+int_primitive!(i16);
+int_primitive!(i32);
+int_primitive!(i64);
+int_primitive!(i128);
+int_primitive!(isize);
+int_primitive!(u8);
+int_primitive!(u16);
+int_primitive!(u32);
+int_primitive!(u64);
+int_primitive!(u128);
+int_primitive!(usize);
+
+impl JsonDeserialize for bool {
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>> {
+    value.to_bool()
   }
 }
-impl JsonSerialize for i16 {
-  fn serialize(&self) -> impl Iterator<Item = char> {
-    IntInterator::new(*self)
-  }
-}
-impl JsonSerialize for i32 {
-  fn serialize(&self) -> impl Iterator<Item = char> {
-    IntInterator::new(*self)
-  }
-}
-impl JsonSerialize for i64 {
-  fn serialize(&self) -> impl Iterator<Item = char> {
-    IntInterator::new(*self)
-  }
-}
-impl JsonSerialize for u8 {
-  fn serialize(&self) -> impl Iterator<Item = char> {
-    IntInterator::new(*self)
-  }
-}
-impl JsonSerialize for u16 {
-  fn serialize(&self) -> impl Iterator<Item = char> {
-    IntInterator::new(*self)
-  }
-}
-impl JsonSerialize for u32 {
-  fn serialize(&self) -> impl Iterator<Item = char> {
-    IntInterator::new(*self)
-  }
-}
-impl JsonSerialize for u64 {
-  fn serialize(&self) -> impl Iterator<Item = char> {
-    IntInterator::new(*self)
+
+/// Deserialize `null` as `()`.
+impl JsonDeserialize for () {
+  fn deserialize<'read, 'parent, B: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, B, S>,
+  ) -> Result<Self, JsonError<'read, B, S>> {
+    value.to_null()
   }
 }
 
