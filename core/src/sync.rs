@@ -4,8 +4,9 @@ use crate::*;
 fn block_on<F: Future>(fut: F) -> F::Output {
   use core::task::*;
   const CONTEXT: Context = Context::from_waker(Waker::noop());
+  #[allow(const_item_mutation)]
   match core::pin::pin!(fut).poll(&mut CONTEXT) {
-    Poll::Ready(value) => return value,
+    Poll::Ready(value) => value,
     Poll::Pending => unreachable!("synchronous IO created a future which yielded pending"),
   }
 }
