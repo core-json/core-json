@@ -5,12 +5,17 @@ use core::{marker::PhantomData, fmt::Debug};
 /// While plenty of crates define their own, we avoid external dependencies by once again defining
 /// our own. For those who wish to use [`embedded-io`](https://docs.rs/embedded-io), please see
 /// [`core-json-embedded-io`](https://docs.rs/core-json-embedded-io).
-pub trait Read<'read>: Sized + Debug {
+pub trait Read<'read>: Sized {
   /// The type for errors when interacting with this reader.
   type Error: Sized + Copy + Debug;
 
   /// Read a single byte from the reader.
-  fn read_byte(&mut self) -> Result<u8, Self::Error>;
+  #[inline(always)]
+  fn read_byte(&mut self) -> Result<u8, Self::Error> {
+    let mut byte = [0; 1];
+    self.read_exact(&mut byte)?;
+    Ok(byte[0])
+  }
 
   /// Read into a slice from the reader.
   fn read_exact(&mut self, slice: &mut [u8]) -> Result<(), Self::Error>;
@@ -102,5 +107,22 @@ impl<'read, R: Read<'read>> Read<'read> for &mut R {
   #[inline(always)]
   fn read_exact(&mut self, slice: &mut [u8]) -> Result<(), Self::Error> {
     R::read_exact(self, slice)
+  }
+}
+
+/// An opaque error from a wrapped [`std::io::Read`] implementor.
+#[derive(Clone, Copy, Debug)]
+#[cfg(feature = "std")]
+pub struct ReadError;
+/// An adapter for [`std::io::Read`] implementors.
+#[cfg(feature = "std")]
+pub struct ReadAdapter<R: std::io::Read>(R);
+#[cfg(feature = "std")]
+impl<R: std::io::Read> Read<'_> for ReadAdapter<R> {
+  type Error = ReadError;
+
+  #[inline(always)]
+  fn read_exact(&mut self, slice: &mut [u8]) -> Result<(), Self::Error> {
+    R::read_exact(&mut self.0, slice).map_err(|_| ReadError)
   }
 }

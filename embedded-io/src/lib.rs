@@ -3,18 +3,13 @@
 #![deny(missing_docs)]
 #![cfg_attr(not(test), no_std)]
 
-use core::fmt;
 use core_json::Read as CjRead;
 use embedded_io::{ReadExactError, Read};
 
 /// An adapter from [`embedded_io::Read`] to [`core_json::Read`].
+#[derive(Debug)]
 pub struct ReadAdapter<R: Read<Error: Copy>> {
   reader: R,
-}
-impl<R: Read<Error: Copy>> fmt::Debug for ReadAdapter<R> {
-  fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-    fmt.debug_struct("ReadAdapter").finish_non_exhaustive()
-  }
 }
 
 impl<R: Read<Error: Copy>> From<R> for ReadAdapter<R> {

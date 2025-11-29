@@ -5,6 +5,8 @@
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
+#[cfg(feature = "std")]
+extern crate std;
 
 mod io;
 mod stack;
@@ -13,6 +15,8 @@ mod number;
 mod deserializer;
 
 pub use io::Read;
+#[cfg(feature = "std")]
+pub use io::ReadAdapter;
 use io::PeekableRead;
 pub use stack::*;
 use string::*;

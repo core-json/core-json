@@ -18,3 +18,4 @@ workspace = true
 
 [features]
 alloc = []
+std = ["alloc"]
