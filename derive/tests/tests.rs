@@ -146,3 +146,28 @@ mod test_mod {
     );
   }
 }
+
+#[test]
+fn tri() {
+  use core_json_traits::{Tri, JsonStructure, JsonSerialize};
+  use core_json_derive::{JsonDeserialize, JsonSerialize};
+
+  #[derive(PartialEq, Eq, Default, Debug, JsonSerialize, JsonDeserialize)]
+  struct HasTri {
+    tri1: Tri<u64>,
+    tri2: Tri<u64>,
+  }
+  for test_case in [
+    (HasTri { tri1: Tri::None, tri2: Tri::None }, "{}"),
+    (HasTri { tri1: Tri::Null, tri2: Tri::None }, "{\"tri1\":null}"),
+    (HasTri { tri1: Tri::None, tri2: Tri::Some(256) }, "{\"tri2\":256}"),
+    (HasTri { tri1: Tri::Null, tri2: Tri::Null }, "{\"tri1\":null,\"tri2\":null}"),
+  ] {
+    assert_eq!(&test_case.0.serialize().collect::<String>(), test_case.1);
+    assert_eq!(
+      HasTri::deserialize_structure::<_, core_json_traits::ConstStack<128>>(test_case.1.as_bytes())
+        .unwrap(),
+      test_case.0,
+    );
+  }
+}

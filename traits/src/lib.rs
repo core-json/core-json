@@ -8,6 +8,8 @@ extern crate alloc;
 
 pub use core_json::*;
 
+mod tri;
+
 mod primitives;
 mod float;
 mod option;
@@ -19,6 +21,7 @@ mod boxed;
 #[cfg(feature = "alloc")]
 mod maps;
 
+pub use tri::Tri;
 pub use float::JsonF64;
 
 /// An item which can be deserialized from a `Value`.

@@ -319,15 +319,30 @@ pub fn derive_json_serialize(object: TokenStream) -> TokenStream {
   let Struct { generic_bounds, generics, name, fields } = parse_struct(object);
 
   let mut fields_serialization = String::new();
-  for (i, (field_name, serialization_field_name)) in fields.iter().enumerate() {
-    let comma = if (i + 1) == fields.len() { "" } else { r#".chain(core::iter::once(','))"# };
-
+  for (field_name, serialization_field_name) in &fields {
     fields_serialization.push_str(&format!(
       r#"
-      .chain("{serialization_field_name}".serialize())
-      .chain(core::iter::once(':'))
-      .chain(core_json_traits::JsonSerialize::serialize(&self.{field_name}))
-      {comma}
+      .chain({{
+        let field =
+          writ_prior_field.then(|| core::iter::once(',')).into_iter().flatten()
+            .chain("{serialization_field_name}".serialize())
+            .chain(core::iter::once(':'));
+
+        let (field, value, value_null) = match Tri::from(&self.{field_name}) {{
+          Tri::Some(value) => {{
+            writ_prior_field = true;
+            (Some(field), Some(core_json_traits::JsonSerialize::serialize(value)), None)
+          }},
+          Tri::Null => {{
+            writ_prior_field = true;
+            (Some(field), None, Some("null".chars()))
+          }},
+          Tri::None => (None, None, None)
+        }};
+        field.into_iter().flatten()
+          .chain(value.into_iter().flatten())
+          .chain(value_null.into_iter().flatten())
+      }})
       "#
     ));
   }
@@ -336,6 +351,9 @@ pub fn derive_json_serialize(object: TokenStream) -> TokenStream {
     r#"
     impl{generic_bounds} core_json_traits::JsonSerialize for {name}{generics} {{
       fn serialize(&self) -> impl Iterator<Item = char> {{
+        use core_json_traits::Tri;
+
+        let mut writ_prior_field = false;
         core::iter::once('{{')
         {fields_serialization}
         .chain(core::iter::once('}}'))
