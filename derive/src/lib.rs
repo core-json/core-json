@@ -212,6 +212,7 @@ pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
   let Struct { generic_bounds, generics, name, fields } = parse_struct(object);
 
   let mut largest_key = 0;
+  let mut field_deserialized = String::new();
   let mut fields_deserialization = String::new();
   for (field_name, serialization_field_name) in &fields {
     largest_key = largest_key.max(serialization_field_name.len());
@@ -225,10 +226,18 @@ pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
     }
     serialization_field_name_array.push(']');
 
+    field_deserialized.push_str(&format!("let mut {field_name}_set = false;"));
     fields_deserialization.push_str(&format!(
       r#"
       {serialization_field_name_array} => {{
-        result.{field_name} = core_json_traits::JsonDeserialize::deserialize(value)?
+        // Error if this key was prior observed
+        if {field_name}_set {{
+         Err(core_json_traits::JsonError::InvalidKey)?;
+        }}
+        {field_name}_set = true;
+        result.{field_name} = {{
+          core_json_traits::JsonDeserialize::deserialize(value)?
+        }}
       }},
       "#
     ));
@@ -252,6 +261,8 @@ pub fn derive_json_deserialize(object: TokenStream) -> TokenStream {
         if {largest_key} == 0 {{
           return Ok(result);
         }}
+
+        {field_deserialized}
 
         let mut key_chars = ['\0'; {largest_key}];
         let mut object = value.fields()?;
