@@ -12,8 +12,7 @@ impl JsonDeserialize for f64 {
 /// A JSON-compatible `f64`.
 ///
 /// JSON does not support representing `NaN`, `inf`, but rather only well-defined values. This
-/// ensures the `f64` is representable within JSON. We additionally limit to normal `f64`s to
-/// achieve certain bounds.
+/// ensures the `f64` is representable within JSON.
 #[derive(Clone, Copy, Default, Debug)]
 pub struct JsonF64(f64);
 
