@@ -217,8 +217,8 @@ async fn single_step<'read, 'parent, R: AsyncRead<'read>, S: Stack>(
 
 enum ToDrop {
   None,
-  StringKey(bool),
-  StringValue(bool),
+  StringKey(ValidateString),
+  StringValue(ValidateString),
 }
 
 pub(crate) struct DelayedDrop<'read, R: AsyncRead<'read>, S: Stack> {
@@ -249,15 +249,18 @@ impl<'read, R: AsyncRead<'read>, S: Stack> DelayedDrop<'read, R, S> {
 
     'outer: loop {
       // Handle dropping of unit types
-      match deserializer.delayed_drop.to_drop {
-        ToDrop::None => {}
-        ToDrop::StringKey(flag) => {
-          deserializer.delayed_drop.to_drop = ToDrop::None;
-          StringKey::drop_string_key(deserializer, flag).await?;
-        }
-        ToDrop::StringValue(flag) => {
-          deserializer.delayed_drop.to_drop = ToDrop::None;
-          StringValue::drop_string_value(deserializer, flag).await?;
+      {
+        let mut new_to_drop = ToDrop::None;
+        core::mem::swap(&mut deserializer.delayed_drop.to_drop, &mut new_to_drop);
+        let to_drop = new_to_drop;
+        match to_drop {
+          ToDrop::None => {}
+          ToDrop::StringKey(string) => {
+            StringKey::drop_string_key(deserializer, string).await?;
+          }
+          ToDrop::StringValue(string) => {
+            StringValue::drop_string_value(deserializer, string).await?;
+          }
         }
       }
 
@@ -278,7 +281,7 @@ impl<'read, R: AsyncRead<'read>, S: Stack> DelayedDrop<'read, R, S> {
           SingleStepUnknownResult::Null => {}
           // We opened a string we now have to handle
           SingleStepUnknownResult::String => {
-            StringValue::drop_string_value(deserializer, false).await?
+            StringValue::drop_string_value(deserializer, ValidateString::Fresh).await?
           }
           // We opened an object/array we now have to advance past
           SingleStepUnknownResult::ObjectOpened | SingleStepUnknownResult::ArrayOpened => {
@@ -331,15 +334,15 @@ pub struct AsyncDeserializer<'read, R: AsyncRead<'read>, S: Stack> {
 impl<'read, R: AsyncRead<'read>, S: Stack> AsyncDeserializer<'read, R, S> {
   /// Queue the drop of a `StringKey`.
   #[inline(always)]
-  pub(crate) fn drop_string_key(&mut self, flag: bool) {
+  pub(crate) fn drop_string_key(&mut self, string: ValidateString) {
     self.delayed_drop.nothing_queued = false;
-    self.delayed_drop.to_drop = ToDrop::StringKey(flag);
+    self.delayed_drop.to_drop = ToDrop::StringKey(string);
   }
   /// Queue the drop of a `StringValue`.
   #[inline(always)]
-  pub(crate) fn drop_string_value(&mut self, flag: bool) {
+  pub(crate) fn drop_string_value(&mut self, string: ValidateString) {
     self.delayed_drop.nothing_queued = false;
-    self.delayed_drop.to_drop = ToDrop::StringValue(flag);
+    self.delayed_drop.to_drop = ToDrop::StringValue(string);
   }
   /// Queue the drop of an object or array.
   #[inline(always)]

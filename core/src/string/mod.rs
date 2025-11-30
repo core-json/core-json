@@ -1,4 +1,6 @@
-use crate::{AsyncRead, Stack, AsyncDeserializer, JsonError};
+use core::task::Poll;
+
+use crate::{AsyncRead, PeekableRead, Stack, AsyncDeserializer, JsonError};
 
 mod unicode;
 mod hex;
@@ -6,76 +8,110 @@ mod hex;
 use unicode::*;
 use hex::*;
 
-/// An iterator which validates a string, yielding the items within.
+/// An sink which validates a string, yielding the items within.
 ///
 /// This will yield `None` upon reaching a `"`, but is not fused and has undefined behavior upon
-/// successive calls to `Iterator::next`.
+/// successive calls to `ValidateString::next`. It also has undefined behavior for calls after an
+/// error is returned.
 ///
-/// This does not implement `Drop`. It is the caller's responsibility to exhaust this iterator to
-/// ensure the deserializer is advanced correctly.
-pub(crate) struct ValidateString<'read, 'parent, R: AsyncRead<'read>, S: Stack> {
-  deserializer: &'parent mut AsyncDeserializer<'read, R, S>,
-  done: bool,
+/// This does not implement `Drop`. It is the caller's responsibility to exhaust this to ensure the
+/// deserializer is advanced correctly.
+#[allow(private_interfaces)]
+pub(crate) enum ValidateString {
+  Fresh,
+  Unicode(UnicodeSink),
+  Escaping,
+  EscapedUnicode([u8; 4], u8),
+  Done,
 }
 
-impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> ValidateString<'read, 'parent, R, S> {
+impl ValidateString {
   #[inline(always)]
-  async fn next_char(&mut self) -> Result<Option<StringCharacter>, JsonError<'read, R, S>> {
-    let this = self.deserializer.reader.read_byte().await.map_err(JsonError::ReadError)?;
-
-    // https://datatracker.ietf.org/doc/html/rfc8259#section-7
-    Ok(match this {
-      // The characters allowed to be unescaped
-      b'\x20' ..= b'\x21' | b'\x23' ..= b'\x5b' | b'\x5d' ..= b'\x7f' => {
-        Some(StringCharacter::Character(this as char))
-      }
-      b'\x80' ..= b'\xff' => Some(StringCharacter::Character(
-        read_non_ascii_utf8(&mut self.deserializer.reader, this).await?,
-      )),
-      // The escaping character
-      b'\\' => {
-        // All characters which are valid to be escaped are ASCII, allowing us to use `read_byte`
-        // here
-        let escaped = self.deserializer.reader.read_byte().await.map_err(JsonError::ReadError)?;
-        match escaped {
-          b'"' | b'\\' | b'/' => Some(StringCharacter::Character(escaped as char)),
-          b'b' => Some(StringCharacter::Character('\x08')),
-          b'f' => Some(StringCharacter::Character('\x0c')),
-          b'n' => Some(StringCharacter::Character('\n')),
-          b'r' => Some(StringCharacter::Character('\r')),
-          b't' => Some(StringCharacter::Character('\t')),
-          // If this is "\u", check it's followed by hex characters
-          b'\x75' => {
-            // We can use `read_byte` here as valid hex characters will be ASCII (one-byte)
-            let mut bytes = [0; 4];
-            self
-              .deserializer
-              .reader
-              .read_exact_into_non_empty_slice(&mut bytes)
-              .await
-              .map_err(JsonError::ReadError)?;
-            if !validate_hex(bytes) {
-              Err(JsonError::InvalidValue)?;
-            }
-            Some(StringCharacter::EscapedUnicode(bytes))
+  fn push_byte<'read, R: AsyncRead<'read>, S: Stack>(
+    &mut self,
+    byte: u8,
+  ) -> Poll<Result<Option<StringCharacter>, JsonError<'read, R, S>>> {
+    match self {
+      // https://datatracker.ietf.org/doc/html/rfc8259#section-7
+      Self::Fresh => match byte {
+        // The characters allowed to be unescaped
+        b'\x20' ..= b'\x21' | b'\x23' ..= b'\x5b' | b'\x5d' ..= b'\x7f' => {
+          Poll::Ready(Ok(Some(StringCharacter::Character(byte as char))))
+        }
+        // Unicode characters allowed to be unescpaed
+        b'\x80' ..= b'\xff' => {
+          *self = Self::Unicode(UnicodeSink::read_non_ascii_utf8(byte));
+          Poll::Pending
+        }
+        // The escaping character
+        b'\\' => {
+          *self = Self::Escaping;
+          Poll::Pending
+        }
+        // The end of the string
+        b'"' => {
+          *self = Self::Done;
+          Poll::Ready(Ok(None))
+        }
+        _ => Poll::Ready(Err(JsonError::InvalidValue)),
+      },
+      Self::Unicode(sink) => match sink.push_byte(byte) {
+        Poll::Ready(char) => {
+          *self = Self::Fresh;
+          Poll::Ready(char.map(|char| Some(StringCharacter::Character(char))))
+        }
+        Poll::Pending => Poll::Pending,
+      },
+      Self::Escaping => {
+        *self = Self::Fresh;
+        Poll::Ready(Ok(Some(match byte {
+          b'"' | b'\\' | b'/' => StringCharacter::Character(byte as char),
+          b'b' => StringCharacter::Character('\x08'),
+          b'f' => StringCharacter::Character('\x0c'),
+          b'n' => StringCharacter::Character('\n'),
+          b'r' => StringCharacter::Character('\r'),
+          b't' => StringCharacter::Character('\t'),
+          // If this is "\u", it's the 4-byte hex for a Unicode codepoint
+          b'u' => {
+            *self = Self::EscapedUnicode([0; 4], 0);
+            return Poll::Pending;
           }
-          _ => Err(JsonError::InvalidValue)?,
+          _ => return Poll::Ready(Err(JsonError::InvalidValue)),
+        })))
+      }
+      Self::EscapedUnicode(hex, already) => {
+        hex[usize::from(*already)] = byte;
+        *already = already.wrapping_add(1);
+        if *already == 4 {
+          let hex = *hex;
+          if !validate_hex(hex) {
+            return Poll::Ready(Err(JsonError::InvalidValue));
+          }
+          *self = Self::Fresh;
+          Poll::Ready(Ok(Some(StringCharacter::EscapedUnicode(hex))))
+        } else {
+          Poll::Pending
         }
       }
-      b'"' => {
-        self.done = true;
-        None
-      }
-      _ => Err(JsonError::InvalidValue)?,
-    })
+      Self::Done => Poll::Ready(Err(JsonError::InternalError)),
+    }
   }
 
   #[inline(always)]
-  async fn drop(&mut self) -> Result<(), JsonError<'read, R, S>> {
-    while !self.done {
-      self.next_char().await?;
+  async fn drop<'read, R: AsyncRead<'read>, S: Stack>(
+    mut self,
+    reader: &mut PeekableRead<'read, R>,
+  ) -> Result<(), JsonError<'read, R, S>> {
+    if matches!(self, Self::Done) {
+      return Ok(());
     }
-    Ok(())
+    loop {
+      match self.push_byte::<R, S>(reader.read_byte().await.map_err(JsonError::ReadError)?) {
+        Poll::Ready(Ok(None)) => return Ok(()),
+        Poll::Ready(Err(e)) => return Err(e),
+        Poll::Ready(Ok(Some(_))) | Poll::Pending => {}
+      }
+    }
   }
 }
 
@@ -87,24 +123,10 @@ pub(crate) enum StringCharacter {
   EscapedUnicode([u8; 4]),
 }
 
-impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> ValidateString<'read, 'parent, R, S> {
-  #[inline(always)]
-  async fn next(&mut self) -> Option<Result<StringCharacter, JsonError<'read, R, S>>> {
-    match self.next_char().await {
-      Ok(Some(res)) => Some(Ok(res)),
-      Ok(None) => None,
-      Err(e) => {
-        self.deserializer.poison(e);
-        self.done = true;
-        Some(Err(e))
-      }
-    }
-  }
-}
-
 /// An iterator which yields the characters of a string represented within a JSON serialization.
 pub(crate) struct String<'read, 'parent, R: AsyncRead<'read>, S: Stack> {
-  validation: ValidateString<'read, 'parent, R, S>,
+  validation: ValidateString,
+  deserializer: &'parent mut AsyncDeserializer<'read, R, S>,
   errored: bool,
 }
 
@@ -112,82 +134,128 @@ impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> String<'read, 'parent, R, S>
   /// AsyncRead a just-opened string from a JSON serialization.
   #[inline(always)]
   pub(crate) fn read(deserializer: &'parent mut AsyncDeserializer<'read, R, S>) -> Self {
-    String { validation: ValidateString { deserializer, done: false }, errored: false }
+    String { validation: ValidateString::Fresh, deserializer, errored: false }
   }
-}
-
-#[inline(always)]
-async fn handle_escaped_unicode<'read, 'parent, R: AsyncRead<'read>, S: Stack>(
-  hex: [u8; 4],
-  validation: &mut ValidateString<'read, 'parent, R, S>,
-) -> Result<char, JsonError<'read, R, S>> {
-  let next = read_hex(hex)?;
-
-  /*
-    If the intended value of this codepoint exceeds 0xffff, it's specified to be encoded
-    with its UTF-16 surrogate pair. We distinguish and fetch the second part if necessary
-    now. For the actual conversion algorithm from the UTF-16 surrogate pair to the UTF
-    codepoint, https://en.wikipedia.org/wiki/UTF-16#U+D800_to_U+DFFF_(surrogates) is
-    used as reference.
-  */
-  let next_is_utf16_high_surrogate = matches!(next, 0xd800 ..= 0xdbff);
-  let codepoint = if next_is_utf16_high_surrogate {
-    let high = (next - 0xd800) << 10;
-
-    /*
-      https://datatracker.ietf.org/doc/html/rfc8259#section-8.2 notes how the syntax
-      allows an incomplete codepoint, further noting the behavior of implementations is
-      unpredictable. The definition of "interoperable" is if the strings are composed
-      entirely of Unicode characters, with an unpaired surrogate being considered as
-      unable to encode a Unicode character.
-
-      As Rust requires `char` be a UTF codepoint, we require the strings be
-      "interoperable" per the RFC 8259 definition. While this may be slightly stricter
-      than the specification alone, it already has plenty of ambiguities due to how many
-      slight differences exist with JSON encoders/decoders.
-
-      Additionally, we'll still decode JSON objects with invalidly specified UTF
-      codepoints within their strings. We just won't support converting them to
-      characters with this iterator. This iterator failing will not cause the
-      deserializer as a whole to fail.
-    */
-    let Some(Ok(StringCharacter::EscapedUnicode(hex))) = validation.next().await else {
-      Err(JsonError::NotUtf8)?
-    };
-    let low = read_hex(hex)?;
-
-    let Some(low) = low.checked_sub(0xdc00) else { Err(JsonError::NotUtf8)? };
-    high + low + 0x10000
-  } else {
-    // If `next` isn't a surrogate, it's interpreted as a codepoint as-is
-    next
-  };
-
-  // Yield the codepoint
-  char::from_u32(codepoint).ok_or(JsonError::NotUtf8)
 }
 
 impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> String<'read, 'parent, R, S> {
   #[inline(always)]
   pub(super) async fn next(&mut self) -> Option<Result<char, JsonError<'read, R, S>>> {
-    if self.errored | self.validation.done {
+    if self.errored || matches!(self.validation, ValidateString::Done) {
       None?;
     }
 
-    Some(match self.validation.next().await? {
-      Ok(StringCharacter::Character(char)) => Ok(char),
-      Ok(StringCharacter::EscapedUnicode(hex)) => {
-        let res = handle_escaped_unicode(hex, &mut self.validation).await;
-        if res.is_err() {
-          self.errored = true;
+    loop {
+      let byte = match self.deserializer.reader.read_byte().await {
+        Ok(byte) => byte,
+        Err(e) => {
+          let e = JsonError::ReadError(e);
+          self.deserializer.poison(e);
+          self.validation = ValidateString::Done;
+          return Some(Err(e));
         }
-        res
+      };
+      match self.validation.push_byte::<R, S>(byte) {
+        Poll::Ready(Ok(Some(StringCharacter::Character(char)))) => return Some(Ok(char)),
+        Poll::Ready(Ok(Some(StringCharacter::EscapedUnicode(hex)))) => {
+          let next = match read_hex(hex) {
+            Ok(next) => next,
+            Err(e) => {
+              self.deserializer.poison(e);
+              self.validation = ValidateString::Done;
+              return Some(Err(e));
+            }
+          };
+
+          /*
+            If the intended value of this codepoint exceeds 0xffff, it's specified to be encoded
+            with its UTF-16 surrogate pair. We distinguish and fetch the second part if necessary
+            now. For the actual conversion algorithm from the UTF-16 surrogate pair to the UTF
+            codepoint, https://en.wikipedia.org/wiki/UTF-16#U+D800_to_U+DFFF_(surrogates) is
+            used as reference.
+          */
+          let next_is_utf16_high_surrogate = matches!(next, 0xd800 ..= 0xdbff);
+          let codepoint = if next_is_utf16_high_surrogate {
+            let high = (next - 0xd800) << 10;
+
+            /*
+              https://datatracker.ietf.org/doc/html/rfc8259#section-8.2 notes how the syntax
+              allows an incomplete codepoint, further noting the behavior of implementations is
+              unpredictable. The definition of "interoperable" is if the strings are composed
+              entirely of Unicode characters, with an unpaired surrogate being considered as
+              unable to encode a Unicode character.
+
+              As Rust requires `char` be a UTF codepoint, we require the strings be
+              "interoperable" per the RFC 8259 definition. While this may be slightly stricter
+              than the specification alone, it already has plenty of ambiguities due to how many
+              slight differences exist with JSON encoders/decoders.
+
+              Additionally, we'll still decode JSON objects with invalidly specified UTF
+              codepoints within their strings. We just won't support converting them to
+              characters with this iterator. This iterator failing will not cause the
+              deserializer as a whole to fail.
+            */
+            let hex = loop {
+              let byte = match self.deserializer.reader.read_byte().await {
+                Ok(byte) => byte,
+                Err(e) => {
+                  let e = JsonError::ReadError(e);
+                  self.deserializer.poison(e);
+                  self.validation = ValidateString::Done;
+                  return Some(Err(e));
+                }
+              };
+              match self.validation.push_byte(byte) {
+                Poll::Ready(Ok(Some(StringCharacter::EscapedUnicode(hex)))) => break hex,
+                Poll::Ready(Ok(Some(_) | None)) => {
+                  self.errored = true;
+                  return Some(Err(JsonError::NotUtf8));
+                }
+                Poll::Ready(Err(e)) => {
+                  self.deserializer.poison(e);
+                  self.validation = ValidateString::Done;
+                  return Some(Err(e));
+                }
+                Poll::Pending => {}
+              }
+            };
+            let low = match read_hex(hex) {
+              Ok(low) => low,
+              Err(e) => {
+                self.deserializer.poison(e);
+                self.validation = ValidateString::Done;
+                return Some(Err(e));
+              }
+            };
+
+            let Some(low) = low.checked_sub(0xdc00) else {
+              self.errored = true;
+              return Some(Err(JsonError::NotUtf8));
+            };
+            high + low + 0x10000
+          } else {
+            // If `next` isn't a surrogate, it's interpreted as a codepoint as-is
+            next
+          };
+
+          // Yield the codepoint
+          return match char::from_u32(codepoint) {
+            Some(char) => Some(Ok(char)),
+            None => {
+              self.errored = true;
+              Some(Err(JsonError::NotUtf8))
+            }
+          };
+        }
+        Poll::Ready(Err(e)) => {
+          self.deserializer.poison(e);
+          self.validation = ValidateString::Done;
+          return Some(Err(e));
+        }
+        Poll::Ready(Ok(None)) => return None,
+        Poll::Pending => {}
       }
-      Err(e) => {
-        self.errored = true;
-        Err(e)
-      }
-    })
+    }
   }
 }
 
@@ -202,17 +270,17 @@ impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> StringKey<'read, 'parent, R,
   #[inline(always)]
   pub(crate) async fn drop_string_key(
     deserializer: &mut AsyncDeserializer<'read, R, S>,
-    done: bool,
+    string: ValidateString,
   ) -> Result<(), JsonError<'read, R, S>> {
-    (ValidateString { deserializer, done }).drop().await?;
+    string.drop::<R, S>(&mut deserializer.reader).await?;
     crate::advance_past_colon(&mut deserializer.reader).await
   }
 }
 impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> StringKey<'read, 'parent, R, S> {
   #[inline(always)]
   pub(super) fn drop(self) -> &'parent mut AsyncDeserializer<'read, R, S> {
-    self.0.validation.deserializer.drop_string_key(self.0.validation.done);
-    self.0.validation.deserializer
+    self.0.deserializer.drop_string_key(self.0.validation);
+    self.0.deserializer
   }
 }
 
@@ -226,15 +294,18 @@ impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> StringValue<'read, 'parent, 
   #[inline(always)]
   pub(crate) async fn drop_string_value(
     deserializer: &mut AsyncDeserializer<'read, R, S>,
-    done: bool,
+    string: ValidateString,
   ) -> Result<(), JsonError<'read, R, S>> {
-    (ValidateString { deserializer, done }).drop().await?;
+    string.drop::<R, S>(&mut deserializer.reader).await?;
     crate::advance_past_comma_or_to_close(&mut deserializer.reader).await
   }
 }
+
 impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> Drop for StringValue<'read, 'parent, R, S> {
   #[inline(always)]
   fn drop(&mut self) {
-    self.0.validation.deserializer.drop_string_value(self.0.validation.done)
+    let mut validation = ValidateString::Done;
+    core::mem::swap(&mut self.0.validation, &mut validation);
+    self.0.deserializer.drop_string_value(validation)
   }
 }

@@ -1,4 +1,6 @@
-use crate::{AsyncRead, PeekableRead, Stack, JsonError};
+use core::task::Poll;
+
+use crate::{AsyncRead, Stack, JsonError};
 
 /// Calculate the length of the non-ASCII UTF-8 codepoint from its first byte.
 ///
@@ -36,21 +38,27 @@ fn utf8_codepoint_to_char<'read, R: AsyncRead<'read>, S: Stack>(
   .ok_or(JsonError::InvalidValue)
 }
 
-/// Read a non-ASCII UTF-8 character from a `AsyncRead`.
-#[inline(always)]
-pub(super) async fn read_non_ascii_utf8<'read, R: AsyncRead<'read>, S: Stack>(
-  reader: &mut PeekableRead<'read, R>,
-  first_byte: u8,
-) -> Result<char, JsonError<'read, R, S>> {
-  let utf8_codepoint_len = non_ascii_utf8_codepoint_len(first_byte);
-
-  let mut utf8_codepoint = [0; 4];
-  let utf8_codepoint = &mut utf8_codepoint[.. utf8_codepoint_len];
-  utf8_codepoint[0] = first_byte;
-  for byte in &mut utf8_codepoint[1 ..] {
-    *byte = reader.read_byte().await.map_err(JsonError::ReadError)?;
+pub(super) struct UnicodeSink([u8; 4], usize, usize);
+impl UnicodeSink {
+  /// Begin reading a non-ASCII UTF-8 character.
+  #[inline(always)]
+  pub(super) fn read_non_ascii_utf8(first_byte: u8) -> Self {
+    let utf8_codepoint_len = non_ascii_utf8_codepoint_len(first_byte);
+    Self([first_byte; 4], 1, utf8_codepoint_len)
   }
-  utf8_codepoint_to_char(utf8_codepoint)
+  #[inline(always)]
+  pub(super) fn push_byte<'read, R: AsyncRead<'read>, S: Stack>(
+    &mut self,
+    byte: u8,
+  ) -> Poll<Result<char, JsonError<'read, R, S>>> {
+    self.0[self.1] = byte;
+    self.1 = self.1.wrapping_add(1);
+    if self.1 == self.2 {
+      Poll::Ready(utf8_codepoint_to_char(&self.0[.. self.2]))
+    } else {
+      Poll::Pending
+    }
+  }
 }
 
 #[test]

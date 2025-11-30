@@ -19,7 +19,7 @@ pub use io::{Read, AsyncRead};
 pub use io::ReadAdapter;
 use io::PeekableRead;
 pub use stack::*;
-use string::{String as InternalInternalString, StringKey, StringValue};
+use string::{ValidateString, String as InternalInternalString, StringKey, StringValue};
 pub use number::{NumberSink, Number};
 pub use deserializer::{AsyncDeserializer, AsyncValue};
 use deserializer::*;
@@ -144,8 +144,9 @@ pub struct AsyncString<'read, 'parent, R: AsyncRead<'read>, S: Stack>(
 impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> AsyncString<'read, 'parent, R, S> {
   /// The next character within the string.
   #[inline(always)]
-  pub async fn next(&mut self) -> Option<Result<char, JsonError<'read, R, S>>> {
-    self.0.0.next().await
+  #[allow(clippy::should_implement_trait)]
+  pub fn next(&mut self) -> impl Future<Output = Option<Result<char, JsonError<'read, R, S>>>> {
+    self.0.0.next()
   }
 }
 
