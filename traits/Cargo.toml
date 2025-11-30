@@ -21,5 +21,5 @@ core-json = { path = "../core", version = "0.4" }
 ryu = { version = "1", default-features = false, optional = true }
 
 [features]
-alloc = []
+alloc = ["core-json/alloc"]
 std = ["alloc", "core-json/std"]
