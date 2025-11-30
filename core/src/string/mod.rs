@@ -106,7 +106,11 @@ impl ValidateString {
       return Ok(());
     }
     loop {
-      match self.push_byte::<R, S>(reader.read_byte().await.map_err(JsonError::ReadError)?) {
+      let byte = match reader.read_byte().await {
+        Ok(byte) => byte,
+        Err(e) => return Err(JsonError::ReadError(e)),
+      };
+      match self.push_byte::<R, S>(byte) {
         Poll::Ready(Ok(None)) => return Ok(()),
         Poll::Ready(Err(e)) => return Err(e),
         Poll::Ready(Ok(Some(_))) | Poll::Pending => {}
@@ -127,21 +131,21 @@ pub(crate) enum StringCharacter {
 pub(crate) struct String<'read, 'parent, R: AsyncRead<'read>, S: Stack> {
   validation: ValidateString,
   deserializer: &'parent mut AsyncDeserializer<'read, R, S>,
-  errored: bool,
+  fused: bool,
 }
 
 impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> String<'read, 'parent, R, S> {
   /// AsyncRead a just-opened string from a JSON serialization.
   #[inline(always)]
   pub(crate) fn read(deserializer: &'parent mut AsyncDeserializer<'read, R, S>) -> Self {
-    String { validation: ValidateString::Fresh, deserializer, errored: false }
+    String { validation: ValidateString::Fresh, deserializer, fused: false }
   }
 }
 
 impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> String<'read, 'parent, R, S> {
   #[inline(always)]
   pub(super) async fn next(&mut self) -> Option<Result<char, JsonError<'read, R, S>>> {
-    if self.errored || matches!(self.validation, ValidateString::Done) {
+    if self.fused {
       None?;
     }
 
@@ -152,6 +156,7 @@ impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> String<'read, 'parent, R, S>
           let e = JsonError::ReadError(e);
           self.deserializer.poison(e);
           self.validation = ValidateString::Done;
+          self.fused = true;
           return Some(Err(e));
         }
       };
@@ -163,6 +168,7 @@ impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> String<'read, 'parent, R, S>
             Err(e) => {
               self.deserializer.poison(e);
               self.validation = ValidateString::Done;
+              self.fused = true;
               return Some(Err(e));
             }
           };
@@ -202,18 +208,20 @@ impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> String<'read, 'parent, R, S>
                   let e = JsonError::ReadError(e);
                   self.deserializer.poison(e);
                   self.validation = ValidateString::Done;
+                  self.fused = true;
                   return Some(Err(e));
                 }
               };
               match self.validation.push_byte(byte) {
                 Poll::Ready(Ok(Some(StringCharacter::EscapedUnicode(hex)))) => break hex,
                 Poll::Ready(Ok(Some(_) | None)) => {
-                  self.errored = true;
+                  self.fused = true;
                   return Some(Err(JsonError::NotUtf8));
                 }
                 Poll::Ready(Err(e)) => {
                   self.deserializer.poison(e);
                   self.validation = ValidateString::Done;
+                  self.fused = true;
                   return Some(Err(e));
                 }
                 Poll::Pending => {}
@@ -224,12 +232,13 @@ impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> String<'read, 'parent, R, S>
               Err(e) => {
                 self.deserializer.poison(e);
                 self.validation = ValidateString::Done;
+                self.fused = true;
                 return Some(Err(e));
               }
             };
 
             let Some(low) = low.checked_sub(0xdc00) else {
-              self.errored = true;
+              self.fused = true;
               return Some(Err(JsonError::NotUtf8));
             };
             high + low + 0x10000
@@ -242,7 +251,7 @@ impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> String<'read, 'parent, R, S>
           return match char::from_u32(codepoint) {
             Some(char) => Some(Ok(char)),
             None => {
-              self.errored = true;
+              self.fused = true;
               Some(Err(JsonError::NotUtf8))
             }
           };
@@ -250,9 +259,13 @@ impl<'read, 'parent, R: AsyncRead<'read>, S: Stack> String<'read, 'parent, R, S>
         Poll::Ready(Err(e)) => {
           self.deserializer.poison(e);
           self.validation = ValidateString::Done;
+          self.fused = true;
           return Some(Err(e));
         }
-        Poll::Ready(Ok(None)) => return None,
+        Poll::Ready(Ok(None)) => {
+          self.fused = true;
+          return None;
+        }
         Poll::Pending => {}
       }
     }
