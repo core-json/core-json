@@ -22,4 +22,4 @@ ryu = { version = "1", default-features = false, optional = true }
 
 [features]
 alloc = []
-std = ["alloc"]
+std = ["alloc", "core-json/std"]

@@ -125,8 +125,9 @@ impl JsonSerialize for () {
   }
 }
 
+#[cfg(feature = "alloc")]
 #[test]
-fn test_int_iterator() {
+fn int_iterator() {
   assert_eq!(JsonSerialize::serialize(&0u8).collect::<String>(), "0");
   assert_eq!(JsonSerialize::serialize(&1u8).collect::<String>(), "1");
   assert_eq!(JsonSerialize::serialize(&u64::MAX).collect::<String>(), format!("{}", u64::MAX));
