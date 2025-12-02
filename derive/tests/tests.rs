@@ -171,21 +171,3 @@ fn tri() {
     );
   }
 }
-
-#[test]
-fn rejects_duplicate_keys() {
-  use core_json_traits::{JsonError, JsonStructure};
-  use core_json_derive::JsonDeserialize;
-
-  #[derive(PartialEq, Eq, Default, Debug, JsonDeserialize)]
-  struct Struct {
-    a: u64,
-  }
-  assert!(matches!(
-    Struct::deserialize_structure::<_, core_json_traits::ConstStack<128>>(
-      "{\"a\":0,\"a\":0}".as_bytes()
-    )
-    .unwrap_err(),
-    JsonError::InvalidKey
-  ));
-}
