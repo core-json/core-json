@@ -86,9 +86,29 @@ impl<T: JsonSerialize> JsonSerialize for [T] {
 }
 
 #[cfg(feature = "alloc")]
-macro_rules! from_iter_and_iter {
+impl<T: JsonDeserialize> JsonDeserialize for alloc::vec::Vec<T> {
+  #[inline(always)]
+  fn deserialize<'read, 'parent, R: Read<'read>, S: Stack>(
+    value: Value<'read, 'parent, R, S>,
+  ) -> Result<Self, JsonError<'read, R, S>> {
+    (Sequence { iterator: value.iterate()?, _phantom: PhantomData }).collect()
+  }
+}
+#[cfg(feature = "alloc")]
+impl<T: JsonDeserialize> JsonStructure for alloc::vec::Vec<T> {}
+#[cfg(feature = "alloc")]
+impl<T: JsonSerialize> JsonSerialize for alloc::vec::Vec<T> {
+  #[inline(always)]
+  fn serialize(&self) -> impl Iterator<Item = char> {
+    serialize_sequence(self.iter())
+  }
+}
+
+#[cfg(feature = "alloc")]
+macro_rules! set {
   ($($deser_bounds: path)|+, $($ser_bounds: path)|+, $kind: ty) => {
     impl<T: $($deser_bounds +)+> JsonDeserialize for $kind {
+      /// This will deserialize a JSON array into a set, accepting duplicates and any ordering.
       #[inline(always)]
       fn deserialize<'read, 'parent, R: Read<'read>, S: Stack>(
         value: Value<'read, 'parent, R, S>,
@@ -98,6 +118,7 @@ macro_rules! from_iter_and_iter {
     }
     impl<T: $($deser_bounds +)+> JsonStructure for $kind {}
     impl<T: $($ser_bounds +)+> JsonSerialize for $kind {
+      /// This will serialize a set as its elements into a JSON array, with undefined ordering.
       #[inline(always)]
       fn serialize(&self) -> impl Iterator<Item = char> {
         serialize_sequence(self.iter())
@@ -106,11 +127,9 @@ macro_rules! from_iter_and_iter {
   };
 }
 #[cfg(feature = "alloc")]
-from_iter_and_iter!(JsonDeserialize, JsonSerialize, alloc::vec::Vec<T>);
-#[cfg(feature = "alloc")]
-from_iter_and_iter!(Ord | JsonDeserialize, Ord | JsonSerialize, alloc::collections::BTreeSet<T>);
+set!(Ord | JsonDeserialize, Ord | JsonSerialize, alloc::collections::BTreeSet<T>);
 #[cfg(feature = "std")]
-from_iter_and_iter!(
+set!(
   Eq | core::hash::Hash | JsonDeserialize,
   Eq | core::hash::Hash | JsonSerialize,
   std::collections::HashSet<T>
