@@ -27,7 +27,7 @@ The optional `ryu` features enables serializing `f64`s via
 implementation present in `core` is used, truncating to the first `f64::DIGITS`
 significant digits.
 
-`ryu` is faster than `core` (https://github.com/rust-lang/rust/issues/52811)
+[`ryu` is faster than `core`](https://github.com/rust-lang/rust/issues/52811)
 however, so it SHOULD be enabled for trees which already have `ryu` as a
 dependency. The `ryu` feature SHOULD NOT be enabled by libraries which depend
 on `core-json-traits` (solely the final consumer).

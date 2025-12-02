@@ -60,7 +60,7 @@ impl<'read, R: Read<'read>, S: Stack> Copy for JsonError<'read, R, S> {}
 
 /// The type of the value.
 ///
-/// https://datatracker.ietf.org/doc/html/rfc8259#section-3 defines all possible values.
+/// <https://datatracker.ietf.org/doc/html/rfc8259#section-3> defines all possible values.
 pub enum Type {
   /// An object.
   Object,
