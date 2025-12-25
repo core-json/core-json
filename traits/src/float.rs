@@ -42,7 +42,7 @@ impl JsonDeserialize for JsonF64 {
   }
 }
 
-#[cfg(not(feature = "ryu"))]
+#[cfg(not(feature = "zmij"))]
 mod serialize {
   use core::fmt::Write;
   use crate::NumberSink;
@@ -60,23 +60,23 @@ mod serialize {
   }
 }
 
-#[cfg(feature = "ryu")]
+#[cfg(feature = "zmij")]
 mod serialize {
   use super::*;
 
   impl JsonSerialize for JsonF64 {
     fn serialize(&self) -> impl Iterator<Item = char> {
-      let mut buffer = ryu::Buffer::new();
+      let mut buffer = zmij::Buffer::new();
       // Safe as `JsonF64` ensures this isn't `NaN`, `inf`
       let result = buffer.format_finite(self.0).as_bytes();
       /*
-        `ryu` yields us a string slice when we need an owned value to iterate, unfortunately, so
+        `zmij` yields us a string slice when we need an owned value to iterate, unfortunately, so
         we copy the yielded string (a reference to the Buffer) into our own buffer (of equivalent
         size)
       */
-      let mut owned = [0; core::mem::size_of::<ryu::Buffer>()];
+      let mut owned = [0; core::mem::size_of::<zmij::Buffer>()];
       owned[.. result.len()].copy_from_slice(result);
-      // Safe to cast to char as `ryu` yields human-readable ASCII characters
+      // Safe to cast to char as `zmij` yields human-readable ASCII characters
       owned.into_iter().take(result.len()).map(|byte| byte as char)
     }
   }

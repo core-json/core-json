@@ -20,16 +20,18 @@ For automatic derivation of `JsonDeserialize` and `JsonSerialize`, please see
 
 The `alloc` feature enables implementations for `Box`, `Vec`, and `String`.
 
-### `ryu` Feature
+### `zmij` Feature
 
-The optional `ryu` features enables serializing `f64`s via
-[`ryu`](https://docs.rs/ryu). When the `ryu` feature is not enabled, the
+The optional `zmij` features enables serializing `f64`s via
+[`zmij`](https://docs.rs/zmij). When the `zmij` feature is not enabled, the
 implementation present in `core` is used, truncating to the first `f64::DIGITS`
 significant digits.
 
 [`ryu` is faster than `core`](https://github.com/rust-lang/rust/issues/52811)
-however, so it SHOULD be enabled for trees which already have `ryu` as a
-dependency. The `ryu` feature SHOULD NOT be enabled by libraries which depend
+and [`zmij` is faster than `ryu`](
+  https://raw.githubusercontent.com/dtolnay/zmij/15be7513551ae46074acb2c9a6da030a36d76653/performance.png
+) however, so it SHOULD be enabled for trees which already have `zmij` as a
+dependency. The `zmij` feature SHOULD NOT be enabled by libraries which depend
 on `core-json-traits` (solely the final consumer).
 
 ### Changelog
